@@ -1,0 +1,158 @@
+import { loadConfig } from './config.ts';
+import { fetchRss } from './rss.ts';
+import { dedupeKeepRecent, loadState, saveState } from './state.ts';
+import { fetchTelegram } from './telegram.ts';
+import type { Ctx, Item, Source, SourceResult } from './types.ts';
+
+/**
+ * Handler registry. New source *type* = new lib/<type>.ts + one line here.
+ * Individual sources are never hardcoded — they live in sources.json.
+ */
+const HANDLERS: Record<string, (src: Source, ctx: Ctx) => Promise<Item[]>> = {
+    telegram: fetchTelegram,
+    rss: fetchRss,
+};
+
+function ts(iso: string | null, fallback: number): number {
+    const t = iso ? Date.parse(iso) : NaN;
+    return Number.isFinite(t) ? t : fallback;
+}
+
+/** Per-call options for {@link runDigest}. */
+export interface RunOptions {
+    /** Override `sources.json` `lookbackHours` for this call. */
+    lookbackHours?: number;
+    /** `true` = skip since-last-run dedup and do NOT persist state (one-off full pull). */
+    includeSeen?: boolean;
+}
+
+/** Structured digest returned by {@link runDigest}. */
+export interface Payload {
+    /** ISO timestamp of when this run started. */
+    generatedAt: string;
+    /** Effective lookback window used for this run, in hours. */
+    lookbackHours: number;
+    /** Display timezone from config, or `null` if unset. */
+    timezone: string | null;
+    /** Roll-up counts across all sources. */
+    stats: { sources: number; newItems: number; errors: number };
+    /** Per-source items (or an error) in config order. */
+    sources: SourceResult[];
+}
+
+/**
+ * Run one digest pass: for every enabled source (fetched in parallel), fetch via
+ * its type handler, filter to the lookback window and drop previously-seen ids,
+ * sort newest-first, and cap per source. Persists dedup state unless `includeSeen`
+ * is set. A failing or unknown-type source yields an error entry rather than
+ * aborting the run.
+ *
+ * Cap semantics are "freshest-only": handlers stop fetching at the cap counting
+ * previously-seen items too, so in-window items older than the newest `maxItems`
+ * are dropped by design and never surface in later runs. The `.slice()` below only
+ * trims Telegram page overshoot.
+ */
+export async function runDigest(opts: RunOptions = {}): Promise<Payload> {
+    const config = loadConfig();
+    const lookbackHours = opts.lookbackHours ?? config.lookbackHours ?? 24;
+    const now = Date.now();
+    const windowStartMs = now - lookbackHours * 3_600_000;
+    const ctx: Ctx = { now, windowStartMs, config };
+
+    const persist = !opts.includeSeen;
+    const state = persist ? loadState() : {};
+
+    const runSource = async (src: Source): Promise<{ result: SourceResult; freshIds: string[] }> => {
+        const handler = HANDLERS[src.type];
+        if (!handler) {
+            return {
+                result: {
+                    id: src.id,
+                    name: src.name,
+                    type: src.type,
+                    items: [],
+                    error: `Unknown source type "${src.type}". Known types: ${Object.keys(HANDLERS).join(', ')}`,
+                },
+                freshIds: [],
+            };
+        }
+
+        try {
+            const fetched = await handler(src, ctx);
+            const prevSeen = new Set(opts.includeSeen ? [] : (state[src.id]?.seenIds ?? []));
+
+            const fresh = fetched
+                .filter((it) => {
+                    if (prevSeen.has(it.id)) return false;
+                    return ts(it.date, now) >= windowStartMs;
+                })
+                // Fallback 0: undated items pass the window but must not outrank dated news.
+                .sort((a, b) => ts(b.date, 0) - ts(a.date, 0))
+                .slice(0, src.maxItems ?? config.maxItemsPerSource ?? 40);
+
+            return {
+                result: { id: src.id, name: src.name, type: src.type, items: fresh },
+                freshIds: fresh.map((i) => i.id),
+            };
+        } catch (err) {
+            return {
+                result: {
+                    id: src.id,
+                    name: src.name,
+                    type: src.type,
+                    items: [],
+                    error: err instanceof Error ? err.message : String(err),
+                },
+                freshIds: [],
+            };
+        }
+    };
+
+    // runSource never rejects (errors become per-source entries), so Promise.all is safe
+    // and preserves config order.
+    const enabled = config.sources.filter((s) => s.enabled !== false);
+    const outcomes = await Promise.all(enabled.map(runSource));
+    const results = outcomes.map((o) => o.result);
+
+    if (persist) {
+        for (const [i, src] of enabled.entries()) {
+            const outcome = outcomes[i];
+            if (!outcome || outcome.result.error) continue;
+            state[src.id] = {
+                lastRunISO: new Date(now).toISOString(),
+                seenIds: dedupeKeepRecent([...outcome.freshIds, ...(state[src.id]?.seenIds ?? [])], 400),
+            };
+        }
+        // Prune entries for sources removed from the config (disabled ones are kept so
+        // a temporarily disabled source doesn't re-flood when re-enabled).
+        const knownIds = new Set(config.sources.map((s) => s.id));
+        for (const id of Object.keys(state)) {
+            if (!knownIds.has(id)) delete state[id];
+        }
+        saveState(state);
+    }
+
+    return {
+        generatedAt: new Date(now).toISOString(),
+        lookbackHours,
+        timezone: config.timezone ?? null,
+        stats: {
+            sources: results.length,
+            newItems: results.reduce((n, r) => n + r.items.length, 0),
+            errors: results.filter((r) => r.error).length,
+        },
+        sources: results,
+    };
+}
+
+/** List all configured sources (enabled and disabled) for inspection/debugging. */
+export function listSources() {
+    const config = loadConfig();
+    return config.sources.map((s) => ({
+        id: s.id,
+        name: s.name,
+        type: s.type,
+        url: s.url,
+        enabled: s.enabled !== false,
+    }));
+}

@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Real config with private channel/feed URLs (template: sources-template.json)
+sources.json
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Logs & caches
+*.log
+*.tsbuildinfo
+
+# Editor / tool state
+.vscode/
+.idea/
+.claude/settings.local.json
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+.Trash-*
+.fuse_hidden*

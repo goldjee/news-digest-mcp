@@ -1,0 +1,26 @@
+{
+    "lookbackHours": 6,
+    "maxItemsPerSource": 25,
+    "maxCharsPerItem": 1000,
+    "fetchTimeoutMs": 15000,
+    "timezone": "Europe/London",
+    "telegram": { "maxPages": 5 },
+
+    "sources": [
+        {
+            "id": "source_1_id",
+            "name": "source_1_name",
+            "type": "telegram",
+            "url": "https://t.me/s/channel_name",
+            "enabled": true
+        },
+        {
+            "id": "source_2_id",
+            "name": "source_2_name",
+            "type": "rss",
+            "url": "https://example.com/rss.xml",
+            "enabled": true,
+            "maxItems": 10
+        }
+    ]
+}
