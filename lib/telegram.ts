@@ -41,7 +41,12 @@ export async function fetchTelegram(src: Source, ctx: Ctx): Promise<Item[]> {
             const dateMs = dt ? Date.parse(dt) : NaN;
             if (Number.isFinite(dateMs)) oldestDateMs = Math.min(oldestDateMs, dateMs);
 
-            const rawHtml = node.querySelector('.tgme_widget_message_text')?.innerHTML ?? '';
+            // A reply renders the *quoted* message with the same class, before the post's own
+            // text — so take the first block that isn't inside the reply preview.
+            const body = node
+                .querySelectorAll('.tgme_widget_message_text')
+                .find((el) => !el.closest('.tgme_widget_message_reply'));
+            const rawHtml = body?.innerHTML ?? '';
             let text = stripHtml(rawHtml);
             if (!text) continue; // skip media-only / service posts with no caption
             if (maxChars) text = truncate(text, maxChars);
