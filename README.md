@@ -55,6 +55,31 @@ With Node (add `"--experimental-strip-types"` before the path on Node 22.6–23.
 
 Edit `sources.json` — re-read on every call, no restart. A source is `{ id, name, type, url }` (`type`: `telegram` | `rss`). A new type = a `lib/<type>.ts` plus one line in `HANDLERS` (`lib/run.ts`).
 
+## Full article text
+
+Feeds usually ship a one-line teaser. Add `"fullText": true` to a source and the server follows each
+item's link and replaces the body with the article itself, extracted by Firefox's reader-mode
+algorithm ([@mozilla/readability](https://github.com/mozilla/readability)). It scores the page's DOM
+by text density, so it works site-agnostically — there are no per-domain rules to maintain.
+
+Enriched items carry `"textSource": "article"`; items whose page couldn't be read keep the feed text
+and say `"textSource": "feed"`. Extraction never fails a source. Article bodies obey the same
+`maxCharsPerItem` cap as everything else, so consider lowering `maxItems` on enriched sources — 25
+items × 4000 chars is ~100 kB for the agent to read.
+
+Optional tuning, all with sane defaults:
+
+```json
+"fullText": { "concurrency": 4, "timeoutMs": 15000, "minChars": 200, "charThreshold": 500 }
+```
+
+`concurrency` is article pages fetched at once per source, `minChars` rejects extractions too short
+to be worth taking, and `charThreshold` is Readability's own give-up length.
+
+What you won't get: JavaScript-rendered articles, hard paywalls and consent walls yield the feed text
+rather than an error, and feeds that link through a redirector (Google News and friends) rarely
+resolve to a readable page.
+
 ## Without an agent
 
 Call it from code: `import { runDigest } from "./lib/run.ts"`.

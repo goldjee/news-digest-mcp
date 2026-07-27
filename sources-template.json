@@ -20,7 +20,8 @@
             "type": "rss",
             "url": "https://example.com/rss.xml",
             "enabled": true,
-            "maxItems": 10
+            "maxItems": 10,
+            "fullText": true
         }
     ]
 }

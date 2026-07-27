@@ -15,6 +15,11 @@ export interface Source {
     enabled?: boolean;
     /** Per-source item cap (overrides the top-level `maxItemsPerSource` in {@link Config}). */
     maxItems?: number;
+    /**
+     * Follow each item's `url` and replace its body with the extracted article text
+     * (reader mode). Defaults to `false`. Extraction failures keep the original text.
+     */
+    fullText?: boolean;
 }
 
 /** Top-level shape of `sources.json`. */
@@ -29,6 +34,17 @@ export interface Config {
     fetchTimeoutMs?: number;
     /** Telegram-specific tuning: how many `?before=` pages to walk back. */
     telegram?: { maxPages?: number };
+    /** Tuning for sources with `fullText: true`. */
+    fullText?: {
+        /** Article pages fetched at once per source (default 4). */
+        concurrency?: number;
+        /** Per-article fetch timeout in ms (default: `fetchTimeoutMs`). */
+        timeoutMs?: number;
+        /** Reject extractions shorter than this many chars (default 200). */
+        minChars?: number;
+        /** Readability's own minimum article length before it gives up (default 500). */
+        charThreshold?: number;
+    };
     /** Display timezone, passed through to the digest. */
     timezone?: string;
     /** The configured sources. */
@@ -47,6 +63,12 @@ export interface Item {
     url: string;
     /** ISO 8601 timestamp, or `null` if the source gave no usable date. */
     date: string | null;
+    /**
+     * Where {@link Item.text} came from. Only set on sources with `fullText: true`
+     * — `'article'` when reader-mode extraction succeeded, `'feed'` when it didn't
+     * and the original body was kept.
+     */
+    textSource?: 'feed' | 'article';
 }
 
 /** Per-run context threaded through every source handler. */

@@ -38,8 +38,8 @@ export function toISO(dateLike: string | undefined | null): string | null {
 /** Hard ceiling on response bodies — feeds/previews are well under 1 MB. */
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 
-/** GET a URL as text with a browser-like UA (some sources vary output by UA). */
-export async function fetchText(url: string, timeoutMs = 15_000): Promise<string> {
+/** GET a URL with a browser-like UA (some sources vary output by UA), returning the raw bytes. */
+async function fetchBytes(url: string, timeoutMs: number): Promise<{ res: Response; bytes: Uint8Array }> {
     try {
         const res = await fetch(url, {
             redirect: 'follow',
@@ -53,23 +53,89 @@ export async function fetchText(url: string, timeoutMs = 15_000): Promise<string
             },
         });
         if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`);
-        if (!res.body) return '';
+        if (!res.body) return { res, bytes: new Uint8Array() };
 
-        const decoder = new TextDecoder();
-        let text = '';
-        let bytes = 0;
+        const chunks: Uint8Array[] = [];
+        let total = 0;
         for await (const chunk of res.body) {
-            bytes += chunk.byteLength;
-            if (bytes > MAX_RESPONSE_BYTES) {
+            total += chunk.byteLength;
+            if (total > MAX_RESPONSE_BYTES) {
                 throw new Error(`Response exceeds ${MAX_RESPONSE_BYTES / 1024 / 1024} MB for ${url}`);
             }
-            text += decoder.decode(chunk, { stream: true });
+            chunks.push(chunk);
         }
-        return text + decoder.decode();
+
+        const bytes = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+            bytes.set(chunk, offset);
+            offset += chunk.byteLength;
+        }
+        return { res, bytes };
     } catch (e) {
         if (e instanceof DOMException && e.name === 'TimeoutError') {
             throw new Error(`Timeout after ${timeoutMs / 1000}s for ${url}`);
         }
         throw e;
     }
+}
+
+/** GET a URL as UTF-8 text. */
+export async function fetchText(url: string, timeoutMs = 15_000): Promise<string> {
+    const { bytes } = await fetchBytes(url, timeoutMs);
+    return new TextDecoder().decode(bytes);
+}
+
+/** A fetched web page, decoded and with the metadata an extractor needs. */
+export interface Page {
+    html: string;
+    /** URL after redirects — feeds often link through trackers. */
+    finalUrl: string;
+    /** Raw `content-type` header, so callers can skip non-HTML responses. */
+    contentType: string;
+}
+
+/**
+ * GET a URL as an HTML {@link Page}. Unlike {@link fetchText} this honours the page's
+ * declared charset — arbitrary article pages are far likelier than feeds to be
+ * windows-1251 or latin-1, and mojibake in the digest is worse than no text at all.
+ */
+export async function fetchPage(url: string, timeoutMs = 15_000): Promise<Page> {
+    const { res, bytes } = await fetchBytes(url, timeoutMs);
+    const contentType = res.headers.get('content-type') ?? '';
+    return { html: decodeHtml(bytes, contentType), finalUrl: res.url || url, contentType };
+}
+
+/** Decode a page body: charset from the Content-Type header, else a `<meta charset>` sniff, else UTF-8. */
+function decodeHtml(bytes: Uint8Array, contentType: string): string {
+    const label = /charset=["']?\s*([\w-]+)/i.exec(contentType)?.[1] ?? sniffCharset(bytes);
+    if (label) {
+        try {
+            // Bun types the label as a fixed union; a page can declare any encoding, valid or not.
+            return new TextDecoder(label as ConstructorParameters<typeof TextDecoder>[0]).decode(bytes);
+        } catch {
+            // Unknown/unsupported label — fall through to UTF-8.
+        }
+    }
+    return new TextDecoder().decode(bytes);
+}
+
+/** Look for a declared charset in the document head (spec requires it in the first 1024 bytes). */
+function sniffCharset(bytes: Uint8Array): string | undefined {
+    // Decoding as UTF-8 may mangle high bytes, but the declaration itself is always ASCII.
+    const head = new TextDecoder().decode(bytes.subarray(0, 2048));
+    return /<meta[^>]+charset=["']?\s*([\w-]+)/i.exec(head)?.[1] ?? /<\?xml[^>]+encoding=["']([\w-]+)/i.exec(head)?.[1];
+}
+
+/** Map over `items` with at most `limit` calls in flight, preserving input order. */
+export async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+    const out = new Array<R>(items.length);
+    // One shared iterator: every worker pulls the next index as it frees up.
+    const queue = items.entries();
+    const worker = async () => {
+        for (const [i, item] of queue) out[i] = await fn(item);
+    };
+    const workers = Math.max(1, Math.min(limit, items.length));
+    await Promise.all(Array.from({ length: workers }, worker));
+    return out;
 }

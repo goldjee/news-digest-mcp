@@ -38,7 +38,10 @@ all logic to `lib/run.ts`. The server itself is just wiring — no business logi
    first (undated items last), cap per-source. Cap semantics are "freshest-only": handlers stop
    fetching at the cap counting seen items too, so in-window items older than the newest
    `maxItems` are dropped by design and never surface in later runs.
-4. Persist per-source `{ lastRunISO, seenIds }` to state (unless `includeSeen: true`), pruning
+4. For sources with `fullText: true`, replace item bodies with the article text via
+   `lib/extract.ts`. Runs here — after filtering — so article pages are only fetched for items
+   actually being returned, never for previously-seen ones.
+5. Persist per-source `{ lastRunISO, seenIds }` to state (unless `includeSeen: true`), pruning
    entries for sources no longer present in the config.
 
 **Adding a new source type**: create `lib/<type>.ts` exporting `(src: Source, ctx: Ctx) =>
@@ -65,12 +68,29 @@ entirely and skips persisting state (one-off full pull).
 - `lib/rss.ts` uses `fast-xml-parser` and handles RSS 2.0, RSS 1.0 (RDF), and Atom in one function
   by branching on which root key is present (`doc.rss.channel`, `doc.feed`, `doc['rdf:RDF']`).
 
+**Full-text enrichment** (`lib/extract.ts`): opt-in per source (`fullText: true`), source-type
+agnostic — it only needs `Item.url`. Runs `@mozilla/readability` (Firefox's reader mode) over a
+`linkedom` DOM; `<figure>` elements are dropped first, since their captions are noise in a text
+digest and some sites render them as prose. Everything is best-effort per item: any failure keeps the
+original text, and the outcome is reported as `Item.textSource` (`'article'` | `'feed'`).
+
+One non-obvious piece: Readability can anchor on a single block of an article built from sibling
+blocks and silently drop everything above it (BBC does this — measured 63-82% of the prose retained
+on a third of articles, lede included). So `repair()` compares its output against a snapshot of the
+page's paragraphs and, when coverage falls below 85%, rebuilds the body from every paragraph whose
+wrapper fingerprint (parent tag + class) matches one Readability *did* keep. That learns the page's
+own structure rather than hardcoding selectors, and only applies when it recovers meaningfully more
+text, since the rebuilt body is flat (no headings or lists).
+
 **Shared utilities** (`lib/util.ts`): `stripHtml` (HTML → clean plain text, `<br>`/`<p>` become
 newlines, script/style/noscript contents dropped), `truncate`, `asArray` (normalize XML's
 single-item-vs-array ambiguity), `toISO`, and `fetchText` (fetch with a browser-like UA — some
 sources vary output by UA — plus a timeout, `fetchTimeoutMs` in `sources.json` / default 15s, and
 a 5 MB response cap; a slow or down source becomes a per-source error entry instead of stalling
-the digest).
+the digest). `fetchPage` shares that request path but returns `{ html, finalUrl, contentType }` and
+honours the page's declared charset (header, then a `<meta charset>` sniff) — arbitrary article
+pages are far likelier than feeds to be windows-1251, and mojibake is worse than no text.
+`mapWithLimit` is a bounded-concurrency map, so enrichment doesn't open one socket per item.
 
 **Item identity**: every `Item.id` is namespaced by source type and source id (e.g.
 `tg:<channel>/<msg_id>`, `rss:<source_id>:<guid>`) so ids are globally unique and stable across

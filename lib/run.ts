@@ -1,4 +1,5 @@
 import { loadConfig } from './config.ts';
+import { enrichWithArticleText } from './extract.ts';
 import { fetchRss } from './rss.ts';
 import { dedupeKeepRecent, loadState, saveState } from './state.ts';
 import { fetchTelegram } from './telegram.ts';
@@ -43,7 +44,8 @@ export interface Payload {
 /**
  * Run one digest pass: for every enabled source (fetched in parallel), fetch via
  * its type handler, filter to the lookback window and drop previously-seen ids,
- * sort newest-first, and cap per source. Persists dedup state unless `includeSeen`
+ * sort newest-first, cap per source, and — for sources with `fullText: true` — replace
+ * item bodies with the extracted article text. Persists dedup state unless `includeSeen`
  * is set. A failing or unknown-type source yields an error entry rather than
  * aborting the run.
  *
@@ -90,8 +92,12 @@ export async function runDigest(opts: RunOptions = {}): Promise<Payload> {
                 .sort((a, b) => ts(b.date, 0) - ts(a.date, 0))
                 .slice(0, src.maxItems ?? config.maxItemsPerSource ?? 40);
 
+            // Runs after filtering, so article pages are fetched only for items actually
+            // returned — never for ones already seen in an earlier run.
+            const items = src.fullText ? await enrichWithArticleText(fresh, ctx) : fresh;
+
             return {
-                result: { id: src.id, name: src.name, type: src.type, items: fresh },
+                result: { id: src.id, name: src.name, type: src.type, items },
                 freshIds: fresh.map((i) => i.id),
             };
         } catch (err) {
