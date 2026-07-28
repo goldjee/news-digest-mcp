@@ -7,11 +7,12 @@ import { fetchText, stripHtml, truncate } from './util.ts';
  * (`https://t.me/s/<channel>`) into {@link Item}s — no API or bot token needed.
  *
  * Paginates backwards via `?before=<message_id>`, stopping once it hits the item
- * cap, leaves the lookback window, reaches `maxPages`, or stops making progress.
- * Media-only/service posts with no caption text are skipped.
+ * cap, leaves the lookback window, reaches `maxPages` (per-source, else the
+ * `telegram.maxPages` default), or stops making progress. Media-only/service posts
+ * with no caption text are skipped.
  */
 export async function fetchTelegram(src: Source, ctx: Ctx): Promise<Item[]> {
-    const maxPages = ctx.config.telegram?.maxPages ?? 5;
+    const maxPages = src.maxPages ?? ctx.config.telegram?.maxPages ?? 5;
     const maxItems = src.maxItems ?? ctx.config.maxItemsPerSource ?? 40;
     const maxChars = ctx.config.maxCharsPerItem;
 

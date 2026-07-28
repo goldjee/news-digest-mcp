@@ -18,8 +18,8 @@
     "timezone": "Europe/London",
 
     "telegram": {
-        // How many `?before=` pages to walk back per channel before giving up on the lookback window.
-        // Raise it for busy channels, lower it to cut requests.
+        // Default number of `?before=` pages to walk back per channel before giving up on the
+        // lookback window. A busy channel can override this with its own "maxPages" below.
         "maxPages": 5
     },
 
@@ -39,7 +39,10 @@
             "type": "telegram",
             // Telegram reads the public `t.me/s/<channel>` web preview: no API key or bot token.
             "url": "https://t.me/s/channel_name",
-            "enabled": true
+            "enabled": true,
+            // Telegram only: overrides the top-level telegram.maxPages for this channel.
+            // Raise it for high-volume channels that outrun the default within the lookback window.
+            "maxPages": 10
         },
         {
             "id": "source_2_id",

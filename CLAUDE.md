@@ -69,7 +69,8 @@ entirely and skips persisting state (one-off full pull).
 - `lib/telegram.ts` scrapes the public `https://t.me/s/<channel>` HTML preview (no API/bot token
   needed). It paginates backwards via `?before=<message_id>`, stopping when it hits the item cap,
   leaves the lookback window, reaches `maxPages`, or makes no further progress (`oldestId` stalls).
-  Media-only/service posts with no caption text are skipped.
+  `maxPages` resolves per-source first (`src.maxPages`), then the global `telegram.maxPages`, then 5
+  — the same override chain as `maxItems`. Media-only/service posts with no caption text are skipped.
 - `lib/rss.ts` uses `fast-xml-parser` and handles RSS 2.0, RSS 1.0 (RDF), and Atom in one function
   by branching on which root key is present (`doc.rss.channel`, `doc.feed`, `doc['rdf:RDF']`).
 

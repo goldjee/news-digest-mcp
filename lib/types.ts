@@ -16,6 +16,11 @@ export interface Source {
     /** Per-source item cap (overrides the top-level `maxItemsPerSource` in {@link Config}). */
     maxItems?: number;
     /**
+     * Telegram only: how many `?before=` pages to walk back for this channel
+     * (overrides the top-level `telegram.maxPages` in {@link Config}). Ignored by other types.
+     */
+    maxPages?: number;
+    /**
      * Follow each item's `url` and replace its body with the extracted article text
      * (reader mode). Defaults to `false`. Extraction failures keep the original text.
      */
@@ -32,7 +37,10 @@ export interface Config {
     maxCharsPerItem?: number;
     /** Per-request fetch timeout in ms (default 15000). */
     fetchTimeoutMs?: number;
-    /** Telegram-specific tuning: how many `?before=` pages to walk back. */
+    /**
+     * Telegram-specific tuning: default number of `?before=` pages to walk back
+     * (a source can override it with its own `maxPages`).
+     */
     telegram?: { maxPages?: number };
     /** Tuning for sources with `fullText: true`. */
     fullText?: {
