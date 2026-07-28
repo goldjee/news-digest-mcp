@@ -7,7 +7,7 @@ import type { Ctx, Item, Source, SourceResult } from './types.ts';
 
 /**
  * Handler registry. New source *type* = new lib/<type>.ts + one line here.
- * Individual sources are never hardcoded — they live in sources.json.
+ * Individual sources are never hardcoded — they live in sources.jsonc.
  */
 const HANDLERS: Record<string, (src: Source, ctx: Ctx) => Promise<Item[]>> = {
     telegram: fetchTelegram,
@@ -21,7 +21,7 @@ function ts(iso: string | null, fallback: number): number {
 
 /** Per-call options for {@link runDigest}. */
 export interface RunOptions {
-    /** Override `sources.json` `lookbackHours` for this call. */
+    /** Override `sources.jsonc` `lookbackHours` for this call. */
     lookbackHours?: number;
     /** `true` = skip since-last-run dedup and do NOT persist state (one-off full pull). */
     includeSeen?: boolean;

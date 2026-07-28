@@ -1,7 +1,8 @@
 # Dependencies
 node_modules/
 
-# Real config with private channel/feed URLs (template: sources-template.json)
+# Real config with private channel/feed URLs (template: sources-template.jsonc)
+sources.jsonc
 sources.json
 
 # Env files

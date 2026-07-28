@@ -1,0 +1,56 @@
+// news-digest config. Copy to `sources.jsonc` and put your own channels/feeds in `sources`.
+// JSONC: comments and trailing commas are allowed. Re-read on every tool call — no restart needed.
+{
+    // Only return items newer than `now - lookbackHours`. Match this to how often you run the digest.
+    "lookbackHours": 6,
+
+    // Default per-source item cap; a source can override it with its own "maxItems".
+    // Caps are "freshest-only": in-window items older than the newest N are dropped and never resurface.
+    "maxItemsPerSource": 25,
+
+    // Truncate each item's body to this many chars, to keep the digest within a sane token budget.
+    "maxCharsPerItem": 1000,
+
+    // Per-request fetch timeout. A slow source becomes one error entry instead of stalling the run.
+    "fetchTimeoutMs": 15000,
+
+    // Display timezone, passed through to the digest output. IANA name.
+    "timezone": "Europe/London",
+
+    "telegram": {
+        // How many `?before=` pages to walk back per channel before giving up on the lookback window.
+        // Raise it for busy channels, lower it to cut requests.
+        "maxPages": 5
+    },
+
+    // Tuning for sources with "fullText": true. All optional — shown here with their defaults.
+    // "fullText": {
+    //     "concurrency": 4,      // article pages fetched at once, per source
+    //     "timeoutMs": 15000,    // per-article fetch timeout; defaults to fetchTimeoutMs
+    //     "minChars": 200,       // reject extractions shorter than this, keep the feed text instead
+    //     "charThreshold": 500   // Readability's own minimum article length
+    // },
+
+    "sources": [
+        {
+            // "id" is the dedup key — keep it stable, or the source re-floods on the next run.
+            "id": "source_1_id",
+            "name": "source_1_name",
+            "type": "telegram",
+            // Telegram reads the public `t.me/s/<channel>` web preview: no API key or bot token.
+            "url": "https://t.me/s/channel_name",
+            "enabled": true
+        },
+        {
+            "id": "source_2_id",
+            "name": "source_2_name",
+            "type": "rss", // "rss" handles RSS 2.0, RSS 1.0 (RDF) and Atom alike
+            "url": "https://example.com/rss.xml",
+            "enabled": true,
+            "maxItems": 10, // overrides the top-level maxItemsPerSource
+            // Follow each item's link and replace the feed summary with the full article text
+            // (reader mode). Costs one extra fetch per item; failures keep the feed text.
+            "fullText": true
+        }
+    ]
+}

@@ -11,8 +11,11 @@ Clone this repository somewhere you find convenient, then install dependencies a
 ```bash
 cd /path/to/news-digest
 bun install                             # or: npm install
-cp sources-template.json sources.json   # then add your Telegram/RSS sources
+cp sources-template.jsonc sources.jsonc   # then add your Telegram/RSS sources
 ```
+
+The config is **JSONC** — regular JSON plus `//` comments and trailing commas. The template is
+commented throughout, so it doubles as the reference for every option.
 
 ## Register with your MCP client
 
@@ -44,7 +47,7 @@ With Node (add `"--experimental-strip-types"` before the path on Node 22.6–23.
 }
 ```
 
-`sources.json` is resolved relative to the server files (override with `$NEWS_DIGEST_CONFIG`). Some clients prefix tools, e.g. `news-digest_get_news`.
+`sources.jsonc` is resolved relative to the server files, falling back to `sources.json` if that's what you already have (override either with `$NEWS_DIGEST_CONFIG`). Some clients prefix tools, e.g. `news-digest_get_news`.
 
 ## Tools
 
@@ -53,7 +56,7 @@ With Node (add `"--experimental-strip-types"` before the path on Node 22.6–23.
 
 ## Sources
 
-Edit `sources.json` — re-read on every call, no restart. A source is `{ id, name, type, url }` (`type`: `telegram` | `rss`). A new type = a `lib/<type>.ts` plus one line in `HANDLERS` (`lib/run.ts`).
+Edit `sources.jsonc` — re-read on every call, no restart. A source is `{ id, name, type, url }` (`type`: `telegram` | `rss`). A new type = a `lib/<type>.ts` plus one line in `HANDLERS` (`lib/run.ts`).
 
 ## Full article text
 
@@ -69,7 +72,7 @@ items × 4000 chars is ~100 kB for the agent to read.
 
 Optional tuning, all with sane defaults:
 
-```json
+```jsonc
 "fullText": { "concurrency": 4, "timeoutMs": 15000, "minChars": 200, "charThreshold": 500 }
 ```
 

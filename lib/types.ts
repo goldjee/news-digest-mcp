@@ -1,7 +1,7 @@
 // Shared types. Note: `type` is a plain string so an unknown source type in
-// sources.json becomes a friendly runtime error instead of a compile error.
+// sources.jsonc becomes a friendly runtime error instead of a compile error.
 
-/** One configured news source, as declared in `sources.json`. */
+/** One configured news source, as declared in `sources.jsonc`. */
 export interface Source {
     /** Stable, unique id — used as the state/dedup key. */
     id: string;
@@ -22,7 +22,7 @@ export interface Source {
     fullText?: boolean;
 }
 
-/** Top-level shape of `sources.json`. */
+/** Top-level shape of `sources.jsonc`. */
 export interface Config {
     /** Only consider items newer than `now - lookbackHours`. */
     lookbackHours: number;

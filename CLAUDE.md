@@ -31,7 +31,7 @@ the exact `initialize` / `tools/call` sequence).
 all logic to `lib/run.ts`. The server itself is just wiring — no business logic lives here.
 
 **Core flow** (`lib/run.ts::runDigest`):
-1. Load `sources.json` via `lib/config.ts`.
+1. Load `sources.jsonc` via `lib/config.ts`.
 2. For each enabled source (all fetched in parallel), dispatch to a handler by `source.type` via
    the `HANDLERS` registry (`{ telegram: fetchTelegram, rss: fetchRss }`).
 3. Filter fetched items against the lookback window and previously-seen IDs (dedup), sort newest
@@ -46,13 +46,18 @@ all logic to `lib/run.ts`. The server itself is just wiring — no business logi
 
 **Adding a new source type**: create `lib/<type>.ts` exporting `(src: Source, ctx: Ctx) =>
 Promise<Item[]>`, then add one line to the `HANDLERS` map in `lib/run.ts`. Individual sources are
-never hardcoded — they live entirely in `sources.json`, keyed by `type` as a plain string (an
+never hardcoded — they live entirely in `sources.jsonc`, keyed by `type` as a plain string (an
 unknown type is a runtime error, not a compile error — see the note atop `lib/types.ts`).
 
-**Config resolution** (`lib/config.ts`): `sources.json` is read fresh on every call (no caching,
-no restart needed to pick up edits). Path resolution: `$NEWS_DIGEST_CONFIG` env var, else
-`<repo>/sources.json`. `sources-template.json` is the checked-in template; the real
-`sources.json` is gitignored (contains user's actual channel/feed URLs).
+**Config resolution** (`lib/config.ts`): the config is **JSONC** (JSON + `//` and `/* */` comments
++ trailing commas), parsed with `jsonc-parser`; both config files carry inline comments documenting
+each option, so the template is the option reference. It's read fresh on every call (no caching, no
+restart needed to pick up edits) — that hot-reload is load-bearing, so don't add a module-level
+cache. Path resolution: `$NEWS_DIGEST_CONFIG` env var, else the first of `<repo>/sources.jsonc`,
+`<repo>/sources.json` that exists (the `.json` name is a compatibility fallback for older installs
+and is still parsed as JSONC). `sources-template.jsonc` is the checked-in template; the real
+`sources.jsonc` is gitignored (contains user's actual channel/feed URLs). A parse failure throws
+with every error's `line:col`, failing the whole tool call rather than silently serving stale config.
 
 **State** (`lib/state.ts`): dedup state is stored *outside* the repo (so it survives a read-only
 install) at `$NEWS_DIGEST_STATE`, or `$XDG_STATE_HOME/news-digest/state.json`, or
@@ -85,7 +90,7 @@ text, since the rebuilt body is flat (no headings or lists).
 **Shared utilities** (`lib/util.ts`): `stripHtml` (HTML → clean plain text, `<br>`/`<p>` become
 newlines, script/style/noscript contents dropped), `truncate`, `asArray` (normalize XML's
 single-item-vs-array ambiguity), `toISO`, and `fetchText` (fetch with a browser-like UA — some
-sources vary output by UA — plus a timeout, `fetchTimeoutMs` in `sources.json` / default 15s, and
+sources vary output by UA — plus a timeout, `fetchTimeoutMs` in `sources.jsonc` / default 15s, and
 a 5 MB response cap; a slow or down source becomes a per-source error entry instead of stalling
 the digest). `fetchPage` shares that request path but returns `{ html, finalUrl, contentType }` and
 honours the page's declared charset (header, then a `<meta charset>` sniff) — arbitrary article

@@ -1,5 +1,5 @@
 // MCP server (stdio) for osaurus. osaurus launches this as `bun server.ts` on the
-// HOST, so bun, node_modules, sources.json and network are all present — no sandbox.
+// HOST, so bun, node_modules, sources.jsonc and network are all present — no sandbox.
 //
 // Exposes two tools:
 //   get_news({ lookbackHours?, includeSeen? }) -> structured JSON of fresh items
@@ -27,7 +27,7 @@ server.registerTool(
                 .int()
                 .positive()
                 .optional()
-                .describe('Окно в часах. Переопределяет lookbackHours из sources.json.'),
+                .describe('Окно в часах. Переопределяет lookbackHours из sources.jsonc.'),
             includeSeen: z
                 .boolean()
                 .optional()
@@ -47,7 +47,7 @@ server.registerTool(
     'list_sources',
     {
         title: 'List sources',
-        description: 'Показывает настроенные источники из sources.json (id, name, type, url, enabled).',
+        description: 'Показывает настроенные источники из sources.jsonc (id, name, type, url, enabled).',
         inputSchema: {},
     },
     async () => ({
