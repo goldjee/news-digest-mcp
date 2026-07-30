@@ -1,5 +1,12 @@
 // Shared types. Note: `type` is a plain string so an unknown source type in
 // sources.jsonc becomes a friendly runtime error instead of a compile error.
+//
+// Config *input* types are declared here as interfaces; the *output* types (Item,
+// SourceResult) are inferred from the zod schemas in lib/schema.ts, which the MCP
+// tools also publish as their `outputSchema`. Edit the shape there, not here.
+
+import type { z } from 'zod';
+import type { ItemSchema, SourceResultSchema } from './schema.ts';
 
 /** One configured news source, as declared in `sources.jsonc`. */
 export interface Source {
@@ -59,25 +66,8 @@ export interface Config {
     sources: Source[];
 }
 
-/** A single normalized news item from any source. */
-export interface Item {
-    /** Globally unique, stable across runs (for dedup). */
-    id: string;
-    /** Item title; present for RSS, usually absent for Telegram. */
-    title?: string;
-    /** Plain-text body (HTML stripped, possibly truncated). */
-    text: string;
-    /** Canonical link to the item. */
-    url: string;
-    /** ISO 8601 timestamp, or `null` if the source gave no usable date. */
-    date: string | null;
-    /**
-     * Where {@link Item.text} came from. Only set on sources with `fullText: true`
-     * — `'article'` when reader-mode extraction succeeded, `'feed'` when it didn't
-     * and the original body was kept.
-     */
-    textSource?: 'feed' | 'article';
-}
+/** A single normalized news item from any source. Shape lives in {@link ItemSchema}. */
+export type Item = z.infer<typeof ItemSchema>;
 
 /** Per-run context threaded through every source handler. */
 export interface Ctx {
@@ -89,13 +79,5 @@ export interface Ctx {
     config: Config;
 }
 
-/** Result for one source within a digest {@link Payload}. */
-export interface SourceResult {
-    id: string;
-    name: string;
-    type: string;
-    /** Fresh items for this source (empty if it errored). */
-    items: Item[];
-    /** Set instead of `items` when the source failed. */
-    error?: string;
-}
+/** Result for one source within a digest payload. Shape lives in {@link SourceResultSchema}. */
+export type SourceResult = z.infer<typeof SourceResultSchema>;

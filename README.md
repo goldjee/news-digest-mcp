@@ -54,6 +54,45 @@ With Node (add `"--experimental-strip-types"` before the path on Node 22.6–23.
 - **`get_news({ lookbackHours?, includeSeen? })`** — fresh items in the window. Returns only what's new since the last call (state in `~/.local/state/news-digest/`). `includeSeen: true` = full pull, no dedup, no state written.
 - **`list_sources()`** — configured sources (for debugging).
 
+Both tools declare an `outputSchema`, so a client can discover the response shape from `tools/list`
+and validate against it. Each result carries the payload twice: as `structuredContent` (a real JSON
+object) and as serialized JSON in a text block, which the spec asks for so clients that don't read
+structured output still work.
+
+```jsonc
+{
+    "content": [{ "type": "text", "text": "{\"generatedAt\":\"2026-07-30T…\",…}" }],
+    "structuredContent": {
+        "generatedAt": "2026-07-30T21:44:03.118Z",
+        "lookbackHours": 24,
+        "timezone": "Europe/London",
+        "stats": { "sources": 5, "newItems": 33, "errors": 1 },
+        "sources": [
+            {
+                "id": "bbc-uk-rss",
+                "name": "BBC UK",
+                "type": "rss",
+                "items": [
+                    {
+                        "id": "rss:bbc-uk-rss:https://www.bbc.co.uk/news/articles/c78gnj1qqyyo#0",
+                        "title": "…",
+                        "text": "…",
+                        "url": "https://www.bbc.co.uk/news/articles/c78gnj1qqyyo",
+                        "date": "2026-07-30T18:12:00.000Z",
+                        "textSource": "article"
+                    }
+                ]
+            },
+            // a source that failed keeps its entry, with `error` set and `items` empty
+            { "id": "…", "name": "…", "type": "rss", "items": [], "error": "HTTP 404 Not Found for …" }
+        ]
+    }
+}
+```
+
+`list_sources` returns `{ "sources": [...] }` rather than a bare array — `structuredContent` has to
+be a JSON object, and the text block carries the identical value.
+
 ## Sources
 
 Edit `sources.jsonc` — re-read on every call, no restart. A source is `{ id, name, type, url }` (`type`: `telegram` | `rss`). A new type = a `lib/<type>.ts` plus one line in `HANDLERS` (`lib/run.ts`).

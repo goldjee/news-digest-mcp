@@ -1,6 +1,8 @@
+import type { z } from 'zod';
 import { loadConfig } from './config.ts';
 import { enrichWithArticleText } from './extract.ts';
 import { fetchRss } from './rss.ts';
+import type { PayloadSchema } from './schema.ts';
 import { dedupeKeepRecent, loadState, saveState } from './state.ts';
 import { fetchTelegram } from './telegram.ts';
 import type { Ctx, Item, Source, SourceResult } from './types.ts';
@@ -27,19 +29,8 @@ export interface RunOptions {
     includeSeen?: boolean;
 }
 
-/** Structured digest returned by {@link runDigest}. */
-export interface Payload {
-    /** ISO timestamp of when this run started. */
-    generatedAt: string;
-    /** Effective lookback window used for this run, in hours. */
-    lookbackHours: number;
-    /** Display timezone from config, or `null` if unset. */
-    timezone: string | null;
-    /** Roll-up counts across all sources. */
-    stats: { sources: number; newItems: number; errors: number };
-    /** Per-source items (or an error) in config order. */
-    sources: SourceResult[];
-}
+/** Structured digest returned by {@link runDigest}. Shape lives in {@link PayloadSchema}. */
+export type Payload = z.infer<typeof PayloadSchema>;
 
 /**
  * Run one digest pass: for every enabled source (fetched in parallel), fetch via

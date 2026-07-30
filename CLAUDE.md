@@ -28,7 +28,21 @@ the exact `initialize` / `tools/call` sequence).
 ## Architecture
 
 **Entry point**: `server.ts` registers two MCP tools (`get_news`, `list_sources`) and delegates
-all logic to `lib/run.ts`. The server itself is just wiring — no business logic lives here.
+all logic to `lib/run.ts`. The server itself is just wiring — no business logic lives here. Both
+tools publish an `outputSchema` and return the payload as `structuredContent` *and* as serialized
+JSON in a text block (the spec's backwards-compatibility path for clients that read only `content`).
+`list_sources` wraps its list as `{ sources: [...] }` because `structuredContent` must be a JSON
+object, not a bare array.
+
+**Output shapes** (`lib/schema.ts`): zod schemas are the single source of truth for everything the
+tools return. `Item` and `SourceResult` (`lib/types.ts`) and `Payload` (`lib/run.ts`) are
+`z.infer`red from them, so there is one definition, not two that can drift. Two things follow.
+Field docs go in `.describe()`, not JSDoc — that text is published in the JSON Schema that
+`tools/list` advertises, so clients and the model actually read it, whereas JSDoc is erased at build
+time. And the SDK validates `structuredContent` against these schemas on *every* call, so a payload
+field added without a matching schema field fails the tool call outright rather than degrading —
+edit the schema, not the interface. Config *input* types (`Source`, `Config`, `Ctx`) stay plain
+interfaces: `lib/config.ts` validates those by hand so it can report each error's `line:col`.
 
 **Core flow** (`lib/run.ts::runDigest`):
 1. Load `sources.jsonc` via `lib/config.ts`.
