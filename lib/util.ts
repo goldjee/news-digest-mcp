@@ -35,6 +35,100 @@ export function toISO(dateLike: string | undefined | null): string | null {
     return Number.isNaN(t) ? null : new Date(t).toISOString();
 }
 
+/**
+ * Query-param name prefixes that exist only for analytics. Matched case-insensitively:
+ * trackers ship as both `CMP` and `cmp`, and no meaningful param differs from these by case alone.
+ */
+const TRACKING_PREFIXES = [
+    'utm_',
+    'at_',
+    'ns_',
+    'pk_',
+    'mtm_',
+    'piwik_',
+    'mc_',
+    'hsa_',
+    'vero_',
+    'oly_',
+    'stm_',
+    '_hs',
+];
+
+/**
+ * Exact param names to drop. Names like `ref`, `source`, `from`, `si`, `partner` and `campaign`
+ * are deliberately absent — they're tracking on some sites and load-bearing routing on others,
+ * and serving a broken link is worse than serving a tagged one.
+ */
+const TRACKING_PARAMS = new Set([
+    // ad-click ids
+    'fbclid',
+    'gclid',
+    'gbraid',
+    'wbraid',
+    'dclid',
+    'msclkid',
+    'yclid',
+    'twclid',
+    'ttclid',
+    'li_fat_id',
+    'epik',
+    'rb_clickid',
+    's_kwcid',
+    'ef_id',
+    // social / analytics session ids
+    'igshid',
+    'igsh',
+    'mibextid',
+    'xtor',
+    '_openstat',
+    '_ga',
+    '_gl',
+    // publisher campaign ids
+    'cmp',
+    'cmpid',
+    'icid',
+    'ito',
+    'ncid',
+    'smid',
+    'smtyp',
+    'sr_share',
+    'mkt_tok',
+    'trk',
+    'trkcampaign',
+    'spm',
+    'scm',
+    // yahoo consent handoff
+    'guccounter',
+    'guce_referrer',
+    'guce_referrer_sig',
+]);
+
+/**
+ * Strip analytics query params from a link, leaving the rest of the URL byte-identical.
+ * Total by design — an empty, relative or malformed link is returned as-is rather than
+ * throwing, since one bad item must not take down the whole source.
+ */
+export function cleanUrl(url: string): string {
+    if (!url) return url;
+    try {
+        const u = new URL(url);
+        let removed = false;
+        // Snapshot the keys first — deleting during live iteration skips entries.
+        for (const name of [...u.searchParams.keys()]) {
+            const n = name.toLowerCase();
+            if (!TRACKING_PARAMS.has(n) && !TRACKING_PREFIXES.some((p) => n.startsWith(p))) continue;
+            u.searchParams.delete(name);
+            removed = true;
+        }
+        // Only re-serialize when something actually went: URL.toString() lowercases the host
+        // and re-encodes the path, so rewriting an already-clean link buys nothing and risks
+        // changing a URL we were asked to leave alone.
+        return removed ? u.toString() : url;
+    } catch {
+        return url;
+    }
+}
+
 /** Hard ceiling on response bodies — feeds/previews are well under 1 MB. */
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 

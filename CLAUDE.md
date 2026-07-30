@@ -73,6 +73,9 @@ entirely and skips persisting state (one-off full pull).
   — the same override chain as `maxItems`. Media-only/service posts with no caption text are skipped.
 - `lib/rss.ts` uses `fast-xml-parser` and handles RSS 2.0, RSS 1.0 (RDF), and Atom in one function
   by branching on which root key is present (`doc.rss.channel`, `doc.feed`, `doc['rdf:RDF']`).
+  Item links run through `cleanUrl` at the point they're assigned, so `Item.url` and the
+  `guid || link` id fallback see the same tracking-free string. A feed's own `<guid>` is never
+  rewritten — it's an opaque identity token, and touching it would invalidate persisted `seenIds`.
 
 **Full-text enrichment** (`lib/extract.ts`): opt-in per source (`fullText: true`), source-type
 agnostic — it only needs `Item.url`. Runs `@mozilla/readability` (Firefox's reader mode) over a
@@ -90,12 +93,16 @@ text, since the rebuilt body is flat (no headings or lists).
 
 **Shared utilities** (`lib/util.ts`): `stripHtml` (HTML → clean plain text, `<br>`/`<p>` become
 newlines, script/style/noscript contents dropped), `truncate`, `asArray` (normalize XML's
-single-item-vs-array ambiguity), `toISO`, and `fetchText` (fetch with a browser-like UA — some
-sources vary output by UA — plus a timeout, `fetchTimeoutMs` in `sources.jsonc` / default 15s, and
-a 5 MB response cap; a slow or down source becomes a per-source error entry instead of stalling
-the digest). `fetchPage` shares that request path but returns `{ html, finalUrl, contentType }` and
-honours the page's declared charset (header, then a `<meta charset>` sniff) — arbitrary article
-pages are far likelier than feeds to be windows-1251, and mojibake is worse than no text.
+single-item-vs-array ambiguity), `toISO`, `cleanUrl` (drop analytics query params — `utm_*`,
+BBC's `at_*`, `fbclid`, `cmp`, `ito` and friends — from a link; deliberately total, so an empty,
+relative or malformed URL comes back unchanged rather than throwing, and a link with nothing to
+strip is returned byte-identical rather than re-serialized through `URL`), and `fetchText` (fetch
+with a browser-like UA — some sources vary output by UA — plus a timeout, `fetchTimeoutMs` in
+`sources.jsonc` / default 15s, and a 5 MB response cap; a slow or down source becomes a per-source
+error entry instead of stalling the digest). `fetchPage` shares that request path but returns
+`{ html, finalUrl, contentType }` and honours the page's declared charset (header, then a
+`<meta charset>` sniff) — arbitrary article pages are far likelier than feeds to be
+windows-1251, and mojibake is worse than no text.
 `mapWithLimit` is a bounded-concurrency map, so enrichment doesn't open one socket per item.
 
 **Item identity**: every `Item.id` is namespaced by source type and source id (e.g.

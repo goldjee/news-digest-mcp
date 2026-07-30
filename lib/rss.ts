@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { XMLParser } from 'fast-xml-parser';
 import type { Ctx, Item, Source } from './types.ts';
-import { asArray, fetchText, stripHtml, toISO, truncate } from './util.ts';
+import { asArray, cleanUrl, fetchText, stripHtml, toISO, truncate } from './util.ts';
 
 const parser = new XMLParser({
     ignoreAttributes: false,
@@ -60,15 +60,18 @@ export async function fetchRss(src: Source, ctx: Ctx): Promise<Item[]> {
         let dateSrc: string;
         let guid: string;
 
+        // Links are cleaned here, at the assignment, so that both `url` and the `guid || link`
+        // id fallback below see the same tracking-free string. A guid of its own is left alone —
+        // it's an opaque identity token, and rewriting it would invalidate persisted seenIds.
         if (kind === 'atom') {
             title = textOf(it.title);
-            link = atomLink(it);
+            link = cleanUrl(atomLink(it));
             desc = textOf(it.summary) || textOf(it.content);
             dateSrc = textOf(it.updated) || textOf(it.published);
             guid = textOf(it.id) || link;
         } else {
             title = textOf(it.title);
-            link = textOf(it.link);
+            link = cleanUrl(textOf(it.link));
             desc = textOf(it.description) || textOf(it['content:encoded']);
             dateSrc = textOf(it.pubDate) || textOf(it['dc:date']);
             guid = textOf(it.guid) || link || title;
