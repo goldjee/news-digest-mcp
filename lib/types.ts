@@ -66,6 +66,13 @@ export interface Config {
         /** Readability's own minimum article length before it gives up (default 500). */
         charThreshold?: number;
     };
+    /**
+     * Shape of the `content` text block. `"none"` (default) serializes the payload as-is, which
+     * is what the MCP spec asks for. `"osaurus"` wraps it in that host's success envelope —
+     * without it, osaurus re-encodes our JSON into a string field and the model reads every
+     * quote as `\"`. See `lib/envelope.ts`.
+     */
+    hostEnvelope?: 'none' | 'osaurus';
     /** Display timezone, passed through to the digest. */
     timezone?: string;
     /** The configured sources. */

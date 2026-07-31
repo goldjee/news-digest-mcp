@@ -1,15 +1,20 @@
 // Slice one digest run into pages that each fit a character budget.
 //
-// Pure and I/O-free: give it a snapshotted run, a cursor and a budget, get back a page. The
-// budget exists because MCP hosts cap how much a single tool result may return — osaurus, the
-// host this server was built for, head/tail-truncates anything past 100,000 characters, which
-// silently destroys the middle of a digest.
+// Pure and I/O-free: give it a snapshotted run, a page number and a budget, get back that page.
+// The budget exists because MCP hosts cap how much a single tool result may return — osaurus,
+// the host this server was built for, head/tail-truncates anything past 100,000 characters,
+// which silently destroys the middle of a digest.
 //
 // Size is measured with `JSON.stringify().length`, i.e. UTF-16 code units. A host counting
 // Unicode scalars or grapheme clusters (Swift's `String.count`) always arrives at a number no
 // larger, so this measure over-estimates rather than under-estimates. Erring that way is the
 // point: an over-estimate costs an extra page, an under-estimate costs the truncation this
 // whole module exists to avoid.
+//
+// Shape of the work: plan every page boundary first, then build the one that was asked for.
+// Planning is what makes `totalPages` knowable — "page 1 of 3" is the difference between a
+// model knowing it is unfinished and guessing — and both halves run the same packer, so the
+// plan and the built page agree by construction rather than by two routines staying in step.
 
 import type { Digest, Payload } from './run.ts';
 import type { Item, SourceResult } from './types.ts';
@@ -23,12 +28,8 @@ export const MIN_MAX_CHARS = 4_000;
 /** Never claim more than this, whatever the config says — the cap is the host's, not ours. */
 export const MAX_MAX_CHARS = 95_000;
 
-/** Position within a paged run. `index` is carried rather than derived — pages vary in size. */
-export interface Cursor {
-    runId: string;
-    offset: number;
-    index: number;
-}
+/** Slack on the envelope reserve, covering digit drift in the page block's own numbers. */
+const RESERVE_SLACK = 64;
 
 /** One item, plus which source it belongs to. The run flattened into paging order. */
 interface Entry {
@@ -43,18 +44,6 @@ export function clampMaxChars(requested: number | undefined): number {
     return Math.min(MAX_MAX_CHARS, Math.max(MIN_MAX_CHARS, Math.floor(n)));
 }
 
-/** Serialize a cursor for the client to hand straight back. */
-export function formatCursor(c: Cursor): string {
-    return `${c.runId}:${c.offset}:${c.index}`;
-}
-
-/** Parse a cursor a client returned, or null if it isn't one this server minted. */
-export function parseCursor(raw: string): Cursor | null {
-    const m = /^([0-9a-z-]{1,64}):(\d{1,9}):(\d{1,6})$/.exec(raw.trim());
-    if (!m?.[1]) return null;
-    return { runId: m[1], offset: Number(m[2]), index: Number(m[3]) };
-}
-
 /** Every item in the run, in config-source order then feed order. Offsets index into this. */
 function flatten(digest: Digest): Entry[] {
     const out: Entry[] = [];
@@ -62,6 +51,83 @@ function flatten(digest: Digest): Entry[] {
         for (const item of source.items) out.push({ sourceIndex, item });
     }
     return out;
+}
+
+/** How many pages this run splits into at `maxChars`, and where each one starts. */
+export function planPages(digest: Digest, maxChars: number): number[] {
+    const all = flatten(digest);
+    const reserve = envelopeReserve(digest, all.length, maxChars);
+    const starts: number[] = [];
+
+    let offset = 0;
+    do {
+        starts.push(offset);
+        const taken = packFrom(digest, all, offset, reserve, maxChars);
+        // packFrom always takes at least one item once there are any, so this terminates.
+        offset += Math.max(1, taken.length);
+    } while (offset < all.length);
+
+    return starts;
+}
+
+/**
+ * Return page `pageNumber` (1-based) of `digest`, packed to at most `maxChars` characters of
+ * serialized JSON. A page number past the end yields the last page.
+ */
+export function paginate(digest: Digest, runId: string, pageNumber: number, maxChars: number): Payload {
+    const all = flatten(digest);
+    const starts = planPages(digest, maxChars);
+    const index = Math.min(Math.max(1, Math.floor(pageNumber)), starts.length) - 1;
+    const offset = starts[index] ?? 0;
+    const reserve = envelopeReserve(digest, all.length, maxChars);
+
+    const taken = packFrom(digest, all, offset, reserve, maxChars);
+    return finalize(build(digest, taken, { runId, offset, index, total: all.length, totalPages: starts.length }));
+}
+
+/**
+ * Take as many items from `offset` as fit the budget once `reserve` is set aside.
+ *
+ * A single item larger than a whole page would otherwise stall paging forever, so it is
+ * emitted alone with its body cut to fit and `truncated: true` set — a page always advances
+ * by at least one item.
+ */
+function packFrom(digest: Digest, all: Entry[], offset: number, reserve: number, maxChars: number): Entry[] {
+    const taken: Entry[] = [];
+    let used = reserve;
+
+    for (const entry of all.slice(offset)) {
+        // +1 for the separating comma, plus the source's own wrapper the first time a page
+        // opens that source.
+        const wrapper = taken.some((e) => e.sourceIndex === entry.sourceIndex) ? 0 : sourceOverhead(digest, entry);
+        const cost = JSON.stringify(entry.item).length + 1 + wrapper;
+
+        if (used + cost > maxChars) {
+            if (taken.length === 0) taken.push({ ...entry, item: fit(entry.item, maxChars - used - wrapper - 1) });
+            break;
+        }
+        taken.push(entry);
+        used += cost;
+    }
+    return taken;
+}
+
+/** Everything a page costs before its first item: the run fields, the page block, page-1 errors. */
+function envelopeReserve(digest: Digest, total: number, maxChars: number): number {
+    // Built with worst-case values throughout — the widest numbers, the longer `nextAction`
+    // variant, and the error sources that ride on page 1 — so one reserve is an upper bound
+    // for every page of the run. Over-reserving costs a few dozen characters out of 80,000;
+    // under-reserving costs the truncation this module exists to prevent.
+    const worst = build(digest, [], {
+        runId: 'x'.repeat(48),
+        offset: 0,
+        index: 0,
+        total,
+        totalPages: Math.max(1, total),
+    });
+    worst.page.chars = maxChars;
+    worst.page.itemsRemaining = total;
+    return JSON.stringify(worst).length + RESERVE_SLACK;
 }
 
 /** Rebuild `sources` from a run of entries, keeping config order and dropping empty sources. */
@@ -77,76 +143,47 @@ function regroup(digest: Digest, entries: Entry[], withErrors: boolean): SourceR
     return out;
 }
 
-/** Assemble a page around an already-chosen set of entries. `chars` is settled by `finalize`. */
-function build(digest: Digest, entries: Entry[], at: Cursor, total: number): Payload {
-    const delivered = at.offset + entries.length;
-    const remaining = Math.max(0, total - delivered);
-    const nextCursor = remaining > 0 ? formatCursor({ ...at, offset: delivered, index: at.index + 1 }) : null;
+/** Where a page sits, as `build` needs it. Distinct from the published `page` block. */
+interface Position {
+    runId: string;
+    /** Item offset this page starts at. */
+    offset: number;
+    /** 0-based page index; `pageNumber` is this plus one. */
+    index: number;
+    /** Items in the whole run. */
+    total: number;
+    totalPages: number;
+}
 
+/** Assemble a page around an already-chosen set of entries. `chars` is settled by `finalize`. */
+function build(digest: Digest, entries: Entry[], at: Position): Payload {
+    const remaining = Math.max(0, at.total - (at.offset + entries.length));
+    const more = remaining > 0;
+    const nextPage = more ? at.index + 2 : null;
+
+    // Key order is load-bearing: JSON.stringify emits these in insertion order, so a model
+    // reading the serialized result meets the loop condition before the 80kB of news.
     return {
+        nextPageNeeded: more,
+        nextPage,
         generatedAt: digest.generatedAt,
         lookbackHours: digest.lookbackHours,
         timezone: digest.timezone,
         stats: digest.stats,
         page: {
-            runId: at.runId,
-            index: at.index,
+            pageNumber: at.index + 1,
+            totalPages: at.totalPages,
             itemsInPage: entries.length,
             itemsRemaining: remaining,
             chars: 0,
-            nextCursor,
-            nextAction: nextCursor
-                ? `This is one page of ${total} items; ${remaining} remain. Call get_news again with ` +
-                  `cursor="${nextCursor}" and no other arguments. Do not write anything until a page ` +
-                  'comes back with nextCursor: null.'
-                : 'Last page — the whole digest has now been delivered. Do not call get_news again.',
+            runId: at.runId,
+            nextAction: more
+                ? `Call get_news with page=${nextPage}. ${remaining} of ${at.total} items still to come — ` +
+                  'do not write anything until you have them all.'
+                : 'Last page — you now have the whole digest. Do not call get_news again.',
         },
         sources: regroup(digest, entries, at.offset === 0),
     };
-}
-
-/**
- * Return the page of `digest` starting at `at`, packed to at most `maxChars` characters of
- * serialized JSON.
- *
- * Greedy: items are taken in flattened order until the next one would not fit. A single item
- * larger than a whole page would otherwise stall paging forever, so it is emitted alone with
- * its body cut to fit and `truncated: true` set — a page always advances by at least one item.
- */
-export function paginate(digest: Digest, at: Cursor, maxChars: number): Payload {
-    const all = flatten(digest);
-    const total = all.length;
-    const start = Math.max(0, Math.min(at.offset, total));
-    const from: Cursor = { ...at, offset: start };
-
-    // Measure the envelope by building an empty page: the run fields, the page block, and any
-    // source errors all spend budget before a single item is added.
-    let used = measure(build(digest, [], from, total));
-
-    const taken: Entry[] = [];
-    for (const entry of all.slice(start)) {
-        // +1 for the separating comma, plus the source's own wrapper the first time a page
-        // opens that source.
-        const wrapper = taken.some((e) => e.sourceIndex === entry.sourceIndex) ? 0 : sourceOverhead(digest, entry);
-        const cost = JSON.stringify(entry.item).length + 1 + wrapper;
-
-        if (used + cost > maxChars) {
-            // First item of the page and it still doesn't fit: shrink it rather than stall.
-            if (taken.length === 0) taken.push({ ...entry, item: fit(entry.item, maxChars - used - wrapper - 1) });
-            break;
-        }
-        taken.push(entry);
-        used += cost;
-    }
-
-    // The running total is an estimate — escaping and the exact envelope only settle on
-    // serialization — so settle up for real and drop items until the page genuinely fits.
-    let page = build(digest, taken, from, total);
-    while (measure(page) > maxChars && taken.length > 1) {
-        taken.pop();
-        page = build(digest, taken, from, total);
-    }
-    return finalize(page);
 }
 
 /**
@@ -162,11 +199,6 @@ function finalize(page: Payload): Payload {
         chars = Math.max(chars, JSON.stringify({ ...page, page: { ...page.page, chars } }).length);
     }
     return { ...page, page: { ...page.page, chars } };
-}
-
-/** Serialized width of a page, counting the final `page.chars` value. */
-function measure(page: Payload): number {
-    return finalize(page).page.chars;
 }
 
 /** Cost of opening a source on a page: its `{id,name,type,items:[]}` wrapper, serialized. */

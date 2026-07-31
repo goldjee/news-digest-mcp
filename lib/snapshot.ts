@@ -21,7 +21,7 @@ const MAX_AGE_MS = 24 * 3_600_000;
 /** And no more than this many are kept, however recent. */
 const MAX_RUNS = 10;
 
-/** `runId`s are embedded in cursors, which arrive from a model — never trust one as a path. */
+/** A `runId` can arrive as a tool argument, i.e. from a model — never trust one as a path. */
 const RUN_ID = /^[0-9a-z-]{1,64}$/;
 
 function runsDir(): string {
@@ -34,9 +34,8 @@ function runPath(runId: string): string {
 
 /**
  * Mint a run id that sorts chronologically and still reads as a timestamp in a directory
- * listing. Lowercased and stripped of `:`/`.` so it stays inside {@link RUN_ID} — the id
- * travels inside a cursor, and the charset that validates it is the one that keeps a
- * model-supplied string from being used as a path.
+ * listing. Lowercased and stripped of `:`/`.` so it stays inside {@link RUN_ID}, whose charset
+ * is what keeps a model-supplied `runId` from being used as a path.
  */
 function newRunId(generatedAt: string): string {
     const stamp = generatedAt.toLowerCase().replace(/[:.]/g, '-');
@@ -64,21 +63,41 @@ export function loadSnapshot(runId: string): Digest | null {
     }
 }
 
-/** Drop snapshots past {@link MAX_AGE_MS}, then any beyond the {@link MAX_RUNS} newest. */
-function prune(): void {
+/**
+ * The most recent run, or null if none is stored.
+ *
+ * This is what a bare `get_news({ page: 2 })` resolves against, so the client never has to
+ * carry a run id. A paging session is a tight loop inside one turn, so "newest" is the run the
+ * caller means; and even a stale one is the right answer, since its items were marked seen and
+ * this store is the only place the undelivered remainder still exists.
+ */
+export function latestRunId(): string | null {
+    const newest = snapshots()[0];
+    return newest ? newest.runId : null;
+}
+
+/** Every stored snapshot, newest first. */
+function snapshots(): { runId: string; path: string; mtime: number }[] {
     const dir = runsDir();
-    if (!existsSync(dir)) return;
+    if (!existsSync(dir)) return [];
     try {
-        const cutoff = Date.now() - MAX_AGE_MS;
-        const files = readdirSync(dir)
+        return readdirSync(dir)
             .filter((n) => n.endsWith('.json'))
             .map((name) => {
                 const path = resolve(dir, name);
-                return { path, mtime: statSync(path).mtimeMs };
+                return { runId: name.slice(0, -'.json'.length), path, mtime: statSync(path).mtimeMs };
             })
             .sort((a, b) => b.mtime - a.mtime);
+    } catch {
+        return [];
+    }
+}
 
-        for (const [i, f] of files.entries()) {
+/** Drop snapshots past {@link MAX_AGE_MS}, then any beyond the {@link MAX_RUNS} newest. */
+function prune(): void {
+    try {
+        const cutoff = Date.now() - MAX_AGE_MS;
+        for (const [i, f] of snapshots().entries()) {
             if (i < MAX_RUNS && f.mtime >= cutoff) continue;
             rmSync(f.path, { force: true });
         }

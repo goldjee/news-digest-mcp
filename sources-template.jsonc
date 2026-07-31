@@ -20,6 +20,13 @@
     // Per-request fetch timeout. A slow source becomes one error entry instead of stalling the run.
     "fetchTimeoutMs": 15000,
 
+    // Shape of the `content` text block. Leave "none" (the default) for any normal MCP client:
+    // the block is the serialized payload, exactly as the spec asks. Set "osaurus" only for that
+    // host, which ignores structuredContent and re-encodes a plain payload into a string field —
+    // the model then reads every quote as \" and starts writing that way itself. "osaurus" hands
+    // it a ready-made envelope, which it passes through untouched.
+    // "hostEnvelope": "none",
+
     // Display timezone, passed through to the digest output. IANA name.
     "timezone": "Europe/London",
 

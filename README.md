@@ -51,7 +51,7 @@ With Node (add `"--experimental-strip-types"` before the path on Node 22.6–23.
 
 ## Tools
 
-- **`get_news({ lookbackHours?, includeSeen?, cursor?, maxChars? })`** — fresh items in the window, one page at a time (see [Paging](#paging)). Returns only what's new since the last call (state in `~/.local/state/news-digest/`). `includeSeen: true` = full pull, no dedup, no state written.
+- **`get_news({ page?, lookbackHours?, includeSeen?, maxChars?, runId? })`** — fresh items in the window, one page at a time (see [Paging](#paging)). Returns only what's new since the last call (state in `~/.local/state/news-digest/`). `includeSeen: true` = full pull, no dedup, no state written.
 - **`list_sources()`** — configured sources (for debugging).
 
 Both tools declare an `outputSchema`, so a client can discover the response shape from `tools/list`
@@ -63,18 +63,20 @@ structured output still work.
 {
     "content": [{ "type": "text", "text": "{\"generatedAt\":\"2026-07-30T…\",…}" }],
     "structuredContent": {
+        "nextPageNeeded": true,
+        "nextPage": 2,
         "generatedAt": "2026-07-30T21:44:03.118Z",
         "lookbackHours": 24,
         "timezone": "Europe/London",
-        "stats": { "sources": 5, "newItems": 33, "errors": 1 },
+        "stats": { "sources": 5, "newItems": 33, "duplicates": 52, "errors": 1 },
         "page": {
-            "runId": "2026-07-30t21-44-03-118z-l09e16",
-            "index": 0,
+            "pageNumber": 1,
+            "totalPages": 2,
             "itemsInPage": 16,
             "itemsRemaining": 17,
             "chars": 79923,
-            "nextCursor": "2026-07-30t21-44-03-118z-l09e16:16:1",
-            "nextAction": "This is one page of 33 items; 17 remain. Call get_news again with cursor=\"…\" …"
+            "runId": "2026-07-30t21-44-03-118z-l09e16",
+            "nextAction": "Call get_news with page=2. 17 of 33 items still to come — …"
         },
         "sources": [
             {
@@ -102,6 +104,46 @@ structured output still work.
 `list_sources` returns `{ "sources": [...] }` rather than a bare array — `structuredContent` has to
 be a JSON object, and the text block carries the identical value.
 
+### `hostEnvelope`
+
+One host needs the text block shaped differently. osaurus ignores `structuredContent` and reads
+only `content`, then re-encodes anything that isn't one of its own envelopes into `result.text` —
+as a JSON *string*, so every `"` in the payload becomes `\"`. That fourth encoding is what reaches
+the model, nothing unescapes it, and models imitate it: give one 80 kB of escaped JSON and it
+starts writing escaped prose back at you.
+
+Set `"hostEnvelope": "osaurus"` in `sources.jsonc` and the text block becomes
+`{"ok":true,"tool":"get_news","result":{…}}`, which that host passes through byte-identical. The
+default `"none"` is the spec shape — the serialized payload, nothing added — and is what any other
+client should get. `structuredContent` is the same either way. Measured on a real 5-page digest:
+~880 escaped quotes per page under `"none"`, ~450 under `"osaurus"`, and the ones left are real
+quotes inside article text.
+
+## Duplicates across feeds
+
+Several feeds from one outlet carry the same articles. Measured on a live run, BBC's world, UK and
+front-page feeds shared 60% of their items: 86 items, 33 unique URLs, with 20 articles appearing in
+all three and each copy fetching its own full body.
+
+So an article is returned once, under the **first source in config order** that carried it. The
+others are listed on it as `alsoIn`:
+
+```jsonc
+{ "id": "rss:bbc-world-rss:…", "title": "…", "url": "https://www.bbc.co.uk/news/articles/…",
+  "alsoIn": ["bbc-uk-rss", "bbc-uk-front-page-rss"] }
+```
+
+Keeping that list matters: three outlets leading with a story says something about its size, and
+the raw duplication was the only place that showed. `stats.duplicates` counts the copies dropped.
+
+Config order decides attribution, and the digest prints the winning source's name — so if you want
+UK stories credited to your UK feed rather than a world feed that also carries them, put the UK
+feed first.
+
+Dedup runs before full-text extraction, so a story three feeds carry costs one article download
+instead of three. On the run above that was 33 fetches instead of 86, and the payload went from
+~427,000 characters to ~43,000.
+
 ## Paging
 
 MCP hosts cap how much a single tool call may return. osaurus head/tail-truncates anything past
@@ -109,20 +151,29 @@ MCP hosts cap how much a single tool call may return. osaurus head/tail-truncate
 already marked seen, those stories never come back. A digest with full article text clears that
 cap easily: five feeds at 15 kB an article is ~180 kB.
 
-So `get_news` returns **one page at a time**:
+So `get_news` returns **one page at a time**, in the shape
+[Sequential Thinking](https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking)
+uses for the same "keep calling me" problem — a boolean to loop on and an integer to pass back,
+no opaque token to transcribe:
 
-1. Call it normally. It fetches every source once, snapshots the whole run, and returns the
-   first page plus `page.nextCursor`.
-2. While `page.nextCursor` is not null, call `get_news` again with **only** that cursor. Those
-   calls read the snapshot — no network, no config reload, no state written — and return in
-   milliseconds.
-3. `nextCursor: null` means the digest is complete. `page.nextAction` spells out each step in
-   words, for agents that follow instructions better than they follow schemas.
+1. Call it with no arguments. It fetches every source once, snapshots the whole run, and returns
+   page 1.
+2. While the result says `"nextPageNeeded": true`, call `get_news` again with **only**
+   `page` set to the result's `nextPage`. Those calls read the snapshot — no network, no config
+   reload, no state written — and return in milliseconds.
+3. `"nextPageNeeded": false` means the digest is complete.
+
+`nextPageNeeded` and `nextPage` are the first two keys in the response, so a model reading the
+serialized text meets the loop condition before the 80 kB of news. `page.totalPages` says up
+front how many calls it will take, and `page.nextAction` repeats the next step in plain words —
+small local models follow an imperative sentence more reliably than a schema.
 
 The fetch happens once, on the first call, and that is load-bearing rather than an optimisation:
 `get_news` marks the whole run as seen when it snapshots, so a second *run* would correctly
 report the rest of the digest as old news and return nothing. Paging over a snapshot is what
-makes "read the whole feed" survive being split across calls.
+makes "read the whole feed" survive being split across calls. A bare `page` continues the most
+recent run, which is what a paging loop always means; `runId` can pin a specific one, but you
+should not need it.
 
 Sizing is per page, by measured JSON length, not by item count — a page holds as many items as
 fit. `maxCharsPerCall` in `sources.jsonc` sets the budget (default 80000, clamped to
@@ -131,8 +182,8 @@ tool results as a conversation grows, so a long paging loop risks losing the ear
 
 An item too large for a whole page is returned alone with its body cut to fit and
 `"truncated": true` set, so paging always advances. Snapshots live beside the dedup state and
-are kept for 24 hours (10 runs max); paging with an expired cursor returns an error telling you
-to start a fresh run.
+are kept for 24 hours (10 runs max); asking for a page when no snapshot survives returns an
+error telling you to start a fresh run.
 
 ## Sources
 

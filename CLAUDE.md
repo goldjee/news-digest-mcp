@@ -35,7 +35,18 @@ JSON in a text block (the spec's backwards-compatibility path for clients that r
 object, not a bare array. Note that the `content` text block is not merely a fallback: osaurus,
 the host this was built for, reads *only* `content` and ignores `structuredContent` entirely, so
 that block is what a host's per-call output cap gets measured against — which is why `get_news`
-pages (below).
+pages (below), and why its exact shape is configurable (`lib/envelope.ts`).
+
+**Text-block shape** (`lib/envelope.ts`, `hostEnvelope` in the config): default `'none'` serializes
+the payload, which is the spec's SHOULD. `'osaurus'` wraps it as `{ok, tool, result}` because that
+host re-encodes any non-envelope result into `result.text` *as a string* — escaping every quote in
+80 kB, which is what the model then reads and imitates. Its own
+`ToolResultNormalizationTests.existingSuccessEnvelopePassesThroughUntouched` is the contract being
+relied on; `isSuccess` only asks for a leading `{` and `"ok":true`. The error path matters for the
+same reason: osaurus never inspects `isError`, so an unshaped failure reaches the model labelled
+`ok:true`. Keep the two shapes in step — a success envelope with a bare error string is a
+half-measure. The wrapper's cost comes out of the paging budget in `getNews`, so `maxChars` keeps
+meaning "characters the host counts" in either mode.
 
 **Output shapes** (`lib/schema.ts`): zod schemas are the single source of truth for everything the
 tools return. `Item` and `SourceResult` (`lib/types.ts`) and `Digest` / `Payload` (`lib/run.ts`) are
@@ -51,15 +62,27 @@ interfaces: `lib/config.ts` validates those by hand so it can report each error'
 **Paging** (`lib/run.ts::getNews` → `lib/snapshot.ts` + `lib/paginate.ts`): `get_news` returns one
 *page* of a run, not the whole thing, because MCP hosts cap tool output — osaurus head/tail-truncates
 past 100,000 chars (`ToolOutputCaps.universalResult`), and a `fullText` digest runs ~180 kB. A call
-without a `cursor` runs `runDigest`, snapshots the result under a `runId`, and returns page 0; a call
-*with* one replays that snapshot. The snapshot is not a cache optimisation — `runDigest` marks the
-whole run seen when it persists state, so re-running would correctly find the rest of the digest
-already seen and return nothing. Paging over a frozen run is the only way "deliver everything" and
-"dedup across runs" can both hold. Pages are sized by measured `JSON.stringify().length` (a safe
-over-estimate of the grapheme count a Swift host measures), budget from `maxCharsPerCall` / the
-`maxChars` argument. Two invariants worth keeping: a page always advances by at least one item (an
-item too big for a page is cut to fit and marked `truncated`), and source-level `error` entries ride
-on page 0 only.
+without a `page` runs `runDigest`, snapshots the result under a `runId`, and returns page 1; a call
+*with* one replays that snapshot (the most recent, unless `runId` pins another). The snapshot is not
+a cache optimisation — `runDigest` marks the whole run seen when it persists state, so re-running
+would correctly find the rest of the digest already seen and return nothing. Paging over a frozen
+run is the only way "deliver everything" and "dedup across runs" can both hold.
+
+The wire shape deliberately copies Sequential Thinking MCP's `nextThoughtNeeded`/`thoughtNumber`/
+`totalThoughts`: a boolean to loop on, integers to pass back, nothing opaque. That is not
+cosmetic — the target host runs a 12B local model, and the opaque-cursor version it replaced was
+reliably ignored after page 1. `nextPageNeeded` and `nextPage` are emitted as the first two keys
+(key order in `paginate.ts::build` is load-bearing, since `JSON.stringify` preserves insertion
+order and the model reads the serialized text). Anything that makes the loop condition harder to
+find or harder to copy is a regression, however much tidier it looks.
+
+`paginate.ts` plans every page boundary before building the requested one, which is what makes
+`totalPages` knowable; both halves call the same `packFrom`, and a single conservative
+`envelopeReserve` is used by both, so plan and page agree by construction rather than by staying
+in step. Pages are sized by measured `JSON.stringify().length` (a safe over-estimate of the
+grapheme count a Swift host measures), budget from `maxCharsPerCall` / the `maxChars` argument.
+Two invariants worth keeping: a page always advances by at least one item (an item too big for a
+page is cut to fit and marked `truncated`), and source-level `error` entries ride on page 1 only.
 
 **Core flow** (`lib/run.ts::runDigest`, wrapped by `getNews`):
 1. Load `sources.jsonc` via `lib/config.ts`.
@@ -69,12 +92,26 @@ on page 0 only.
    first (undated items last), cap per-source. Cap semantics are "freshest-only": handlers stop
    fetching at the cap counting seen items too, so in-window items older than the newest
    `maxItems` are dropped by design and never surface in later runs.
-4. For sources with `fullText: true`, replace item bodies with the article text via
-   `lib/extract.ts`. Runs here — after filtering — so article pages are only fetched for items
-   actually being returned, never for previously-seen ones.
-5. Persist per-source `{ lastRunISO, seenIds }` to state (unless `includeSeen: true`), pruning
+4. Drop items another source already returned (`dedupeAcrossSources`), keyed on `Item.url`.
+5. For sources with `fullText: true`, replace item bodies with the article text via
+   `lib/extract.ts`. Runs last — after the window/seen filters so dead and stale links are never
+   fetched, and after dedup so a story three feeds carry costs one download, not three.
+6. Persist per-source `{ lastRunISO, seenIds }` to state (unless `includeSeen: true`), pruning
    entries for sources no longer present in the config.
-6. Back in `getNews`, snapshot the finished run and return its first page (see **Paging** above).
+7. Back in `getNews`, snapshot the finished run and return its first page (see **Paging** above).
+
+**Cross-source dedup** (`lib/run.ts::dedupeAcrossSources`): feeds from one outlet overlap hard —
+BBC's world, UK and front-page feeds were measured sharing 60% of their items, each copy carrying
+its own separately-fetched article body, which is what pushed a run to 6 pages and past the
+model's context. Keyed on `Item.url` (already normalized by `cleanUrl` at assignment); no further
+stripping, since the duplicates are byte-identical and trimming a query could merge two real
+pages. First source in config order wins, so **reordering `sources` is how you choose which feed
+a shared story is credited to** — the digest prints that source's name.
+
+Two things not to break. Dedup must stay *before* enrichment, or the saving evaporates. And
+`freshIds` is captured *before* dedup on purpose, so every copy is marked seen, not just the
+survivor: mark only the winner and the next run filters it out as already-seen, promotes a
+duplicate to sole survivor, and re-delivers the same story under a different source.
 
 **Adding a new source type**: create `lib/<type>.ts` exporting `(src: Source, ctx: Ctx) =>
 Promise<Item[]>`, then add one line to the `HANDLERS` map in `lib/run.ts`. Individual sources are

@@ -35,6 +35,14 @@ export const ItemSchema = z.object({
             "Set when `text` was cut to fit this page's character budget — only happens to an item " +
                 'too large for a whole page. Raise `maxChars`, or lower `maxCharsPerItem`, to see all of it.',
         ),
+    alsoIn: z
+        .array(z.string())
+        .optional()
+        .describe(
+            'Other configured sources that carried this same article, by source id. Present only ' +
+                'when more than one did. Several outlets leading with a story is a signal of how big ' +
+                'it is; the item itself is listed once, under the first source in config order.',
+        ),
 });
 
 /** Result for one source within a digest payload. */
@@ -52,15 +60,14 @@ export const SourceResultSchema = z.object({
  * pages are replayed from a snapshot.
  */
 export const PageSchema = z.object({
-    runId: z.string().describe('Identifies the snapshotted run these pages come from.'),
-    index: z.number().describe('0-based position of this page within the run.'),
+    pageNumber: z.number().describe('Which page this is, counting from 1.'),
+    totalPages: z.number().describe('How many pages this run has in total.'),
     itemsInPage: z.number().describe('Items on this page.'),
     itemsRemaining: z.number().describe('Items of this run not yet delivered, after this page.'),
     chars: z.number().describe('Serialized size of this page in characters.'),
-    nextCursor: z
+    runId: z
         .string()
-        .nullable()
-        .describe('Pass verbatim as `cursor` to get the next page. Null means this was the last page.'),
+        .describe('Identifies the snapshotted run. Only needed to pin a run explicitly; normally ignore it.'),
     nextAction: z.string().describe('What to do next, in plain words. Follow it literally.'),
 });
 
@@ -75,7 +82,8 @@ export const digestShape = {
     stats: z
         .object({
             sources: z.number(),
-            newItems: z.number(),
+            newItems: z.number().describe('Items delivered, after cross-source duplicates were removed.'),
+            duplicates: z.number().describe('Copies dropped because another source carried the same URL.'),
             errors: z.number(),
         })
         .describe('Roll-up counts for the WHOLE run across all sources — not just this page.'),
@@ -89,9 +97,21 @@ export const DigestSchema = z.object(digestShape);
 
 // Exported as a raw shape as well as an object: `registerTool` takes the shape, while
 // the assembled object is what validates a payload in tests and at the call site.
+//
+// `nextPageNeeded` and `nextPage` lead deliberately. They are the loop condition, and a model
+// reading the serialized text meets them before anything else — see the key order in
+// `lib/paginate.ts::build`, which is what actually decides it at runtime.
 export const payloadShape = {
+    nextPageNeeded: z
+        .boolean()
+        .describe(
+            'True while part of the digest is still undelivered. While it is true, call get_news ' +
+                'again with `page` set to `nextPage` and no other arguments. False means you have the ' +
+                'whole digest and must stop calling.',
+        ),
+    nextPage: z.number().nullable().describe('Page number to request next. Null when `nextPageNeeded` is false.'),
     ...digestShape,
-    page: PageSchema.describe('Paging state. Keep calling with `page.nextCursor` until it is null.'),
+    page: PageSchema.describe('Where this page sits in the run.'),
 };
 
 /** One page of a digest, as returned by `get_news`. */
