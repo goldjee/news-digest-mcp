@@ -42,6 +42,12 @@ export interface Config {
     maxItemsPerSource?: number;
     /** Truncate long item bodies to this many chars (token control). */
     maxCharsPerItem?: number;
+    /**
+     * Max characters of serialized JSON one `get_news` call may return (default 80000).
+     * Anything beyond it is delivered on the next page. Exists because MCP hosts cap tool
+     * output — osaurus truncates past 100000 — so keep this comfortably under the host's limit.
+     */
+    maxCharsPerCall?: number;
     /** Per-request fetch timeout in ms (default 15000). */
     fetchTimeoutMs?: number;
     /**

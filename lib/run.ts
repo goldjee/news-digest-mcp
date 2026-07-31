@@ -1,8 +1,10 @@
 import type { z } from 'zod';
 import { loadConfig } from './config.ts';
 import { enrichWithArticleText } from './extract.ts';
+import { type Cursor, clampMaxChars, paginate, parseCursor } from './paginate.ts';
 import { fetchRss } from './rss.ts';
-import type { PayloadSchema } from './schema.ts';
+import type { DigestSchema, PayloadSchema } from './schema.ts';
+import { loadSnapshot, saveSnapshot } from './snapshot.ts';
 import { dedupeKeepRecent, loadState, saveState } from './state.ts';
 import { fetchTelegram } from './telegram.ts';
 import type { Ctx, Item, Source, SourceResult } from './types.ts';
@@ -29,7 +31,10 @@ export interface RunOptions {
     includeSeen?: boolean;
 }
 
-/** Structured digest returned by {@link runDigest}. Shape lives in {@link PayloadSchema}. */
+/** One whole digest run, as returned by {@link runDigest}. Shape lives in {@link DigestSchema}. */
+export type Digest = z.infer<typeof DigestSchema>;
+
+/** One page of a digest, as returned by {@link getNews}. Shape lives in {@link PayloadSchema}. */
 export type Payload = z.infer<typeof PayloadSchema>;
 
 /**
@@ -45,7 +50,7 @@ export type Payload = z.infer<typeof PayloadSchema>;
  * are dropped by design and never surface in later runs. The `.slice()` below only
  * trims Telegram page overshoot.
  */
-export async function runDigest(opts: RunOptions = {}): Promise<Payload> {
+export async function runDigest(opts: RunOptions = {}): Promise<Digest> {
     const config = loadConfig();
     const lookbackHours = opts.lookbackHours ?? config.lookbackHours ?? 24;
     const now = Date.now();
@@ -140,6 +145,54 @@ export async function runDigest(opts: RunOptions = {}): Promise<Payload> {
         },
         sources: results,
     };
+}
+
+/** Per-call options for {@link getNews}. */
+export interface GetNewsOptions extends RunOptions {
+    /** `page.nextCursor` from a previous call. Serves the next page from that run's snapshot. */
+    cursor?: string;
+    /** Max characters of serialized JSON this page may occupy. See `lib/paginate.ts`. */
+    maxChars?: number;
+}
+
+/**
+ * Return one page of a digest.
+ *
+ * Without a `cursor` this runs a fresh digest ({@link runDigest} — fetch, filter, dedup,
+ * enrich, persist state), snapshots the whole run, and returns its first page. With one, it
+ * serves the next page straight from that snapshot: no network, no config reload, no state
+ * write. Fetching once and paging over the result is what keeps dedup honest — a second run
+ * would legitimately consider the rest of the digest already seen.
+ */
+export async function getNews(opts: GetNewsOptions = {}): Promise<Payload> {
+    const maxChars = clampMaxChars(opts.maxChars ?? loadConfig().maxCharsPerCall);
+
+    let at: Cursor;
+    let digest: Digest;
+
+    if (opts.cursor) {
+        const parsed = parseCursor(opts.cursor);
+        if (!parsed) {
+            throw new Error(
+                `Not a cursor this server issued: "${opts.cursor}". Pass page.nextCursor exactly as ` +
+                    'it was given, or call get_news with no cursor to start a fresh run.',
+            );
+        }
+        const snapshot = loadSnapshot(parsed.runId);
+        if (!snapshot) {
+            throw new Error(
+                `Run "${parsed.runId}" is no longer available (snapshots are kept for 24h). Call ` +
+                    'get_news with no cursor to start a fresh run.',
+            );
+        }
+        at = parsed;
+        digest = snapshot;
+    } else {
+        digest = await runDigest(opts);
+        at = { runId: saveSnapshot(digest), offset: 0, index: 0 };
+    }
+
+    return paginate(digest, at, maxChars);
 }
 
 /** List all configured sources (enabled and disabled) for inspection/debugging. */

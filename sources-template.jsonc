@@ -11,6 +11,12 @@
     // Truncate each item's body to this many chars, to keep the digest within a sane token budget.
     "maxCharsPerItem": 1000,
 
+    // Max characters of JSON one `get_news` call may return; the rest arrives on the next page.
+    // MCP hosts cap tool output (osaurus truncates past 100000), so keep this under your host's
+    // limit. Clamped to 4000-95000. Prefer few big pages to many small ones: hosts summarise
+    // older tool results as a conversation grows, so a long paging loop risks losing early pages.
+    "maxCharsPerCall": 80000,
+
     // Per-request fetch timeout. A slow source becomes one error entry instead of stalling the run.
     "fetchTimeoutMs": 15000,
 

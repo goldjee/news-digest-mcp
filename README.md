@@ -51,7 +51,7 @@ With Node (add `"--experimental-strip-types"` before the path on Node 22.6–23.
 
 ## Tools
 
-- **`get_news({ lookbackHours?, includeSeen? })`** — fresh items in the window. Returns only what's new since the last call (state in `~/.local/state/news-digest/`). `includeSeen: true` = full pull, no dedup, no state written.
+- **`get_news({ lookbackHours?, includeSeen?, cursor?, maxChars? })`** — fresh items in the window, one page at a time (see [Paging](#paging)). Returns only what's new since the last call (state in `~/.local/state/news-digest/`). `includeSeen: true` = full pull, no dedup, no state written.
 - **`list_sources()`** — configured sources (for debugging).
 
 Both tools declare an `outputSchema`, so a client can discover the response shape from `tools/list`
@@ -67,6 +67,15 @@ structured output still work.
         "lookbackHours": 24,
         "timezone": "Europe/London",
         "stats": { "sources": 5, "newItems": 33, "errors": 1 },
+        "page": {
+            "runId": "2026-07-30t21-44-03-118z-l09e16",
+            "index": 0,
+            "itemsInPage": 16,
+            "itemsRemaining": 17,
+            "chars": 79923,
+            "nextCursor": "2026-07-30t21-44-03-118z-l09e16:16:1",
+            "nextAction": "This is one page of 33 items; 17 remain. Call get_news again with cursor=\"…\" …"
+        },
         "sources": [
             {
                 "id": "bbc-uk-rss",
@@ -92,6 +101,38 @@ structured output still work.
 
 `list_sources` returns `{ "sources": [...] }` rather than a bare array — `structuredContent` has to
 be a JSON object, and the text block carries the identical value.
+
+## Paging
+
+MCP hosts cap how much a single tool call may return. osaurus head/tail-truncates anything past
+100,000 characters, which quietly removes the middle of a digest — and since the run's ids were
+already marked seen, those stories never come back. A digest with full article text clears that
+cap easily: five feeds at 15 kB an article is ~180 kB.
+
+So `get_news` returns **one page at a time**:
+
+1. Call it normally. It fetches every source once, snapshots the whole run, and returns the
+   first page plus `page.nextCursor`.
+2. While `page.nextCursor` is not null, call `get_news` again with **only** that cursor. Those
+   calls read the snapshot — no network, no config reload, no state written — and return in
+   milliseconds.
+3. `nextCursor: null` means the digest is complete. `page.nextAction` spells out each step in
+   words, for agents that follow instructions better than they follow schemas.
+
+The fetch happens once, on the first call, and that is load-bearing rather than an optimisation:
+`get_news` marks the whole run as seen when it snapshots, so a second *run* would correctly
+report the rest of the digest as old news and return nothing. Paging over a snapshot is what
+makes "read the whole feed" survive being split across calls.
+
+Sizing is per page, by measured JSON length, not by item count — a page holds as many items as
+fit. `maxCharsPerCall` in `sources.jsonc` sets the budget (default 80000, clamped to
+4000–95000); `maxChars` overrides it for one call. Prefer few large pages: hosts summarise older
+tool results as a conversation grows, so a long paging loop risks losing the early pages.
+
+An item too large for a whole page is returned alone with its body cut to fit and
+`"truncated": true` set, so paging always advances. Snapshots live beside the dedup state and
+are kept for 24 hours (10 runs max); paging with an expired cursor returns an error telling you
+to start a fresh run.
 
 ## Sources
 

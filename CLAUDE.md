@@ -32,11 +32,15 @@ all logic to `lib/run.ts`. The server itself is just wiring — no business logi
 tools publish an `outputSchema` and return the payload as `structuredContent` *and* as serialized
 JSON in a text block (the spec's backwards-compatibility path for clients that read only `content`).
 `list_sources` wraps its list as `{ sources: [...] }` because `structuredContent` must be a JSON
-object, not a bare array.
+object, not a bare array. Note that the `content` text block is not merely a fallback: osaurus,
+the host this was built for, reads *only* `content` and ignores `structuredContent` entirely, so
+that block is what a host's per-call output cap gets measured against — which is why `get_news`
+pages (below).
 
 **Output shapes** (`lib/schema.ts`): zod schemas are the single source of truth for everything the
-tools return. `Item` and `SourceResult` (`lib/types.ts`) and `Payload` (`lib/run.ts`) are
-`z.infer`red from them, so there is one definition, not two that can drift. Two things follow.
+tools return. `Item` and `SourceResult` (`lib/types.ts`) and `Digest` / `Payload` (`lib/run.ts`) are
+`z.infer`red from them, so there is one definition, not two that can drift. (`Digest` is one whole
+run — what gets snapshotted; `Payload` is that plus a `page` block — what a tool call returns.) Two things follow.
 Field docs go in `.describe()`, not JSDoc — that text is published in the JSON Schema that
 `tools/list` advertises, so clients and the model actually read it, whereas JSDoc is erased at build
 time. And the SDK validates `structuredContent` against these schemas on *every* call, so a payload
@@ -44,7 +48,20 @@ field added without a matching schema field fails the tool call outright rather 
 edit the schema, not the interface. Config *input* types (`Source`, `Config`, `Ctx`) stay plain
 interfaces: `lib/config.ts` validates those by hand so it can report each error's `line:col`.
 
-**Core flow** (`lib/run.ts::runDigest`):
+**Paging** (`lib/run.ts::getNews` → `lib/snapshot.ts` + `lib/paginate.ts`): `get_news` returns one
+*page* of a run, not the whole thing, because MCP hosts cap tool output — osaurus head/tail-truncates
+past 100,000 chars (`ToolOutputCaps.universalResult`), and a `fullText` digest runs ~180 kB. A call
+without a `cursor` runs `runDigest`, snapshots the result under a `runId`, and returns page 0; a call
+*with* one replays that snapshot. The snapshot is not a cache optimisation — `runDigest` marks the
+whole run seen when it persists state, so re-running would correctly find the rest of the digest
+already seen and return nothing. Paging over a frozen run is the only way "deliver everything" and
+"dedup across runs" can both hold. Pages are sized by measured `JSON.stringify().length` (a safe
+over-estimate of the grapheme count a Swift host measures), budget from `maxCharsPerCall` / the
+`maxChars` argument. Two invariants worth keeping: a page always advances by at least one item (an
+item too big for a page is cut to fit and marked `truncated`), and source-level `error` entries ride
+on page 0 only.
+
+**Core flow** (`lib/run.ts::runDigest`, wrapped by `getNews`):
 1. Load `sources.jsonc` via `lib/config.ts`.
 2. For each enabled source (all fetched in parallel), dispatch to a handler by `source.type` via
    the `HANDLERS` registry (`{ telegram: fetchTelegram, rss: fetchRss }`).
@@ -57,6 +74,7 @@ interfaces: `lib/config.ts` validates those by hand so it can report each error'
    actually being returned, never for previously-seen ones.
 5. Persist per-source `{ lastRunISO, seenIds }` to state (unless `includeSeen: true`), pruning
    entries for sources no longer present in the config.
+6. Back in `getNews`, snapshot the finished run and return its first page (see **Paging** above).
 
 **Adding a new source type**: create `lib/<type>.ts` exporting `(src: Source, ctx: Ctx) =>
 Promise<Item[]>`, then add one line to the `HANDLERS` map in `lib/run.ts`. Individual sources are
@@ -77,7 +95,10 @@ with every error's `line:col`, failing the whole tool call rather than silently 
 install) at `$NEWS_DIGEST_STATE`, or `$XDG_STATE_HOME/news-digest/state.json`, or
 `~/.local/state/news-digest/state.json`. Keyed by source id; each entry keeps a bounded
 (`dedupeKeepRecent`, cap 400), newest-first list of `seenIds`. `includeSeen: true` bypasses dedup
-entirely and skips persisting state (one-off full pull).
+entirely and skips persisting state (one-off full pull). Run snapshots (`lib/snapshot.ts`) live in
+`runs/` beside it, resolved via the exported `stateDir()` so `$NEWS_DIGEST_STATE` still moves
+everything at once; they're disposable (24h / 10 runs), and a missing one is a cache miss that asks
+the caller for a fresh run, never an error.
 
 **Source-specific handlers**:
 - `lib/telegram.ts` scrapes the public `https://t.me/s/<channel>` HTML preview (no API/bot token

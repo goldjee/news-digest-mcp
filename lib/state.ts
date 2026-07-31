@@ -23,6 +23,22 @@ function statePath(): string {
     return resolve(base, 'news-digest', 'state.json');
 }
 
+/**
+ * Directory holding all of this server's writable state. Derived from {@link statePath}
+ * rather than recomputed, so `$NEWS_DIGEST_STATE` moves everything — dedup state and run
+ * snapshots alike — to the same place.
+ */
+export function stateDir(): string {
+    return dirname(statePath());
+}
+
+/** Write JSON to `path` atomically (write-then-rename, so a crash can't leave a partial file). */
+export function writeJsonAtomic(path: string, value: unknown): void {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(`${path}.tmp`, JSON.stringify(value, null, 2), 'utf8');
+    renameSync(`${path}.tmp`, path);
+}
+
 /** Load persisted state, or `{}` if the file is missing or unreadable. */
 export function loadState(): State {
     try {
@@ -34,10 +50,7 @@ export function loadState(): State {
 
 /** Persist state to disk (write-then-rename, so a crash can't corrupt it), creating the parent directory if needed. */
 export function saveState(state: State): void {
-    const p = statePath();
-    mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(`${p}.tmp`, JSON.stringify(state, null, 2), 'utf8');
-    renameSync(`${p}.tmp`, p);
+    writeJsonAtomic(statePath(), state);
 }
 
 /** Return the first `cap` unique ids, preserving order (newest first). */

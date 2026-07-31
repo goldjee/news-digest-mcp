@@ -28,6 +28,13 @@ export const ItemSchema = z.object({
             'Where `text` came from. Only set on sources with fullText: true — "article" when ' +
                 'reader-mode extraction succeeded, "feed" when it did not and the original body was kept.',
         ),
+    truncated: z
+        .boolean()
+        .optional()
+        .describe(
+            "Set when `text` was cut to fit this page's character budget — only happens to an item " +
+                'too large for a whole page. Raise `maxChars`, or lower `maxCharsPerItem`, to see all of it.',
+        ),
 });
 
 /** Result for one source within a digest payload. */
@@ -39,9 +46,29 @@ export const SourceResultSchema = z.object({
     error: z.string().optional().describe('Present instead of items when the source failed.'),
 });
 
-// Exported as a raw shape as well as an object: `registerTool` takes the shape, while
-// the assembled object is what validates a payload in tests and at the call site.
-export const payloadShape = {
+/**
+ * Where this page sits in the run. A digest is delivered in one or more pages so no single
+ * tool result blows past a host's per-call output cap; the fetch happens once and later
+ * pages are replayed from a snapshot.
+ */
+export const PageSchema = z.object({
+    runId: z.string().describe('Identifies the snapshotted run these pages come from.'),
+    index: z.number().describe('0-based position of this page within the run.'),
+    itemsInPage: z.number().describe('Items on this page.'),
+    itemsRemaining: z.number().describe('Items of this run not yet delivered, after this page.'),
+    chars: z.number().describe('Serialized size of this page in characters.'),
+    nextCursor: z
+        .string()
+        .nullable()
+        .describe('Pass verbatim as `cursor` to get the next page. Null means this was the last page.'),
+    nextAction: z.string().describe('What to do next, in plain words. Follow it literally.'),
+});
+
+/**
+ * One whole digest run, before it is sliced into pages. This is what gets snapshotted;
+ * `payloadShape` below is this plus the per-page `page` block.
+ */
+export const digestShape = {
     generatedAt: z.string().describe('ISO timestamp of when this run started.'),
     lookbackHours: z.number().describe('Effective lookback window used for this run, in hours.'),
     timezone: z.string().nullable().describe('Display timezone from config, or null if unset.'),
@@ -51,11 +78,23 @@ export const payloadShape = {
             newItems: z.number(),
             errors: z.number(),
         })
-        .describe('Roll-up counts across all sources.'),
-    sources: z.array(SourceResultSchema).describe('Per-source items (or an error) in config order.'),
+        .describe('Roll-up counts for the WHOLE run across all sources — not just this page.'),
+    sources: z
+        .array(SourceResultSchema)
+        .describe('Per-source items in config order — only the sources with items on THIS page.'),
 };
 
-/** Structured digest returned by `get_news`. */
+/** Structured result of one whole digest run. Shape of a snapshot file. */
+export const DigestSchema = z.object(digestShape);
+
+// Exported as a raw shape as well as an object: `registerTool` takes the shape, while
+// the assembled object is what validates a payload in tests and at the call site.
+export const payloadShape = {
+    ...digestShape,
+    page: PageSchema.describe('Paging state. Keep calling with `page.nextCursor` until it is null.'),
+};
+
+/** One page of a digest, as returned by `get_news`. */
 export const PayloadSchema = z.object(payloadShape);
 
 /** One entry of the `list_sources` result. */
