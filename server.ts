@@ -1,5 +1,14 @@
-// MCP server (stdio) for osaurus. osaurus launches this as `bun server.ts` on the
-// HOST, so bun, node_modules, sources.jsonc and network are all present — no sandbox.
+#!/usr/bin/env node
+// MCP server (stdio). Runs unchanged under bun (`bun server.ts`) or node; nothing here is
+// bun-specific, since only `node:` builtins are imported. The shebang matters because
+// `.github/workflows/release.yml` bundles this file to `dist/server.js` and publishes it as
+// the `bin` of a release tarball — bun carries the shebang through to the output.
+//
+// It is launched two ways, and only the first can assume a checkout. osaurus runs it from a
+// clone on the HOST, so node_modules and sources.jsonc sit beside it. As a Claude Code plugin
+// it runs via `npx <release tarball URL>`, unpacked under node_modules: dependencies are
+// already inlined by the bundler, but nothing writable sits beside the server, so the config
+// is found by walking to $XDG_CONFIG_HOME instead. See lib/config.ts::configPath.
 //
 // Exposes two tools:
 //   get_news({ page?, lookbackHours?, includeSeen?, maxChars?, runId? }) -> one page of fresh items

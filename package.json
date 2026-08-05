@@ -1,11 +1,15 @@
 {
-    "name": "news-digest-skill",
+    "name": "news-digest-mcp",
+    "version": "1.0.0",
     "private": true,
+    "license": "Apache-2.0",
+    "repository": "github:goldjee/news-digest-mcp",
     "type": "module",
     "scripts": {
         "lint": "bunx biome lint",
         "format": "bunx biome format",
-        "check": "bunx biome check"
+        "check": "bunx biome check",
+        "build": "bun build ./server.ts --target=node --outdir=dist --external jsonc-parser"
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.12.0",

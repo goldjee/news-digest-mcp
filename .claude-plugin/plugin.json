@@ -1,0 +1,19 @@
+{
+    "$schema": "https://www.schemastore.org/claude-code-plugin-manifest.json",
+    "name": "news-digest-mcp",
+    "description": "A simple MCP server that fetches news from Telegram and RSS sources.",
+    "author": {
+        "name": "Daniel Ch."
+    },
+    "homepage": "https://github.com/goldjee/news-digest-mcp#readme",
+    "repository": "https://github.com/goldjee/news-digest-mcp",
+    "license": "Apache-2.0",
+    "keywords": ["mcp", "rss", "telegram", "news"],
+    "mcpServers": {
+        "news-digest": {
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "https://github.com/goldjee/news-digest-mcp/releases/latest/download/news-digest-mcp.tgz"]
+        }
+    }
+}

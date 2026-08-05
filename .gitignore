@@ -1,6 +1,10 @@
 # Dependencies
 node_modules/
 
+# Build output (produced by `bun run build`; CI publishes it as a release asset)
+dist/
+*.tgz
+
 # Real config with private channel/feed URLs (template: sources-template.jsonc)
 sources.jsonc
 sources.json

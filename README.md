@@ -4,22 +4,64 @@ A simple MCP server that fetches news from Telegram and RSS sources. Connect it 
 
 ## Setup
 
-Runs on **Bun** (any recent version) or **Node ≥ 22.6** (≥ 23.6 runs TypeScript natively; 22.6–23.5 needs `--experimental-strip-types`). No build step either way.
-
-Clone this repository somewhere you find convenient, then install dependencies and copy the template config:
-
-```bash
-cd /path/to/news-digest
-bun install                             # or: npm install
-cp sources-template.jsonc sources.jsonc   # then add your Telegram/RSS sources
-```
+The server speaks MCP over stdio. Run it from a clone, or with `npx` from the latest GitHub release.
+Your choice decides where the config lives.
 
 The config is **JSONC** — regular JSON plus `//` comments and trailing commas. The template is
 commented throughout, so it doubles as the reference for every option.
 
-## Register with your MCP client
+### With npx
 
-The server speaks MCP over stdio. Use the absolute path to the runtime (`which bun` / `which node`) — GUI apps on macOS have a stripped PATH.
+npm fetches a prebuilt bundle from the latest GitHub release, which installs two packages and needs
+**Node ≥ 20.11**. CI builds that bundle on every push to `main`.
+
+With no checkout, the config has nowhere to sit beside the server, so put it in
+`~/.config/news-digest/`:
+
+```bash
+mkdir -p ~/.config/news-digest
+curl -fsSL https://raw.githubusercontent.com/goldjee/news-digest-mcp/main/sources-template.jsonc -o ~/.config/news-digest/sources.jsonc
+```
+
+Add your Telegram/RSS sources to that file, then register the server:
+
+```json
+{
+  "mcpServers": {
+    "news-digest": {
+      "command": "npx",
+      "args": ["-y", "https://github.com/goldjee/news-digest-mcp/releases/latest/download/news-digest-mcp.tgz"]
+    }
+  }
+}
+```
+
+Keep the `-y`. Without it, `npx` prompts on stdin before running a package it hasn't installed, and
+stdin carries the MCP protocol, so the handshake hangs.
+
+`latest` resolves against GitHub on every start, so the server needs network to register, before it
+fetches any news. To pin a build, swap `latest/download` for a specific release, as in
+`releases/download/build-a1b2c3d/news-digest-mcp.tgz`. To drop the per-start fetch, install once with
+`npm i -g <that URL>` and set `"command": "news-digest-mcp"` with no args.
+
+The artifact is JavaScript rather than TypeScript, because Node refuses to strip types anywhere
+under `node_modules`. That also means Bun is not required: `bun` and `bunx` are for working from a
+clone.
+
+### From a clone
+
+Runs on **Bun** (any recent version) or **Node ≥ 22.6** (≥ 23.6 runs TypeScript natively; 22.6–23.5
+needs `--experimental-strip-types`). No build step either way.
+
+```bash
+git clone https://github.com/goldjee/news-digest-mcp.git
+cd news-digest-mcp
+bun install                               # or: npm install
+cp sources-template.jsonc sources.jsonc   # then add your Telegram/RSS sources
+```
+
+Register it with the absolute path to the runtime (`which bun` / `which node`) — GUI apps on macOS
+have a stripped PATH.
 
 With Bun:
 
@@ -47,7 +89,14 @@ With Node (add `"--experimental-strip-types"` before the path on Node 22.6–23.
 }
 ```
 
-`sources.jsonc` is resolved relative to the server files, falling back to `sources.json` if that's what you already have (override either with `$NEWS_DIGEST_CONFIG`). Some clients prefix tools, e.g. `news-digest_get_news`.
+### Where the config is read from
+
+The server checks beside its own files first, then `~/.config/news-digest/` (`$XDG_CONFIG_HOME` is
+honoured), taking `sources.jsonc` or `sources.json` at either location. `$NEWS_DIGEST_CONFIG`
+overrides both. A clone therefore behaves as it always has; an `npx` install has nothing writable
+beside the code, since npm replaces that cache on every fetch, so it reads from `~/.config`. Miss
+all three and the error names each path it tried. Some clients prefix tools, e.g.
+`news-digest_get_news`.
 
 ## Tools
 

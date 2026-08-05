@@ -16,6 +16,7 @@ bun install               # install deps
 bun run lint              # bunx biome lint
 bun run format            # bunx biome format
 bun run check             # bunx biome check (lint + format + organize imports)
+bun run build             # bundle to dist/server.js (what CI publishes; not needed to develop)
 bun server.ts             # run the MCP server directly (reads stdio)
 ```
 
@@ -122,9 +123,17 @@ unknown type is a runtime error, not a compile error — see the note atop `lib/
 + trailing commas), parsed with `jsonc-parser`; both config files carry inline comments documenting
 each option, so the template is the option reference. It's read fresh on every call (no caching, no
 restart needed to pick up edits) — that hot-reload is load-bearing, so don't add a module-level
-cache. Path resolution: `$NEWS_DIGEST_CONFIG` env var, else the first of `<repo>/sources.jsonc`,
-`<repo>/sources.json` that exists (the `.json` name is a compatibility fallback for older installs
-and is still parsed as JSONC). `sources-template.jsonc` is the checked-in template; the real
+cache. Path resolution: `$NEWS_DIGEST_CONFIG` env var, else the first of `sources.jsonc`,
+`sources.json` that exists — first beside the server files, then under
+`$XDG_CONFIG_HOME/news-digest/` (default `~/.config/news-digest/`). The `.json` name is a
+compatibility fallback for older installs and is still parsed as JSONC. The install dir is checked
+*before* XDG so a checkout behaves exactly as it always has; the XDG location exists because
+`npx github:goldjee/news-digest-mcp` (how the Claude Code plugin launches this — see
+`.claude-plugin/plugin.json`) runs the server from a package cache, where nothing writable sits
+beside the code and the whole tree is replaced on every fetch. It mirrors what `lib/state.ts`
+already does for state. When nothing is found the error names every location checked, since which
+one you're meant to create depends on how the server was launched.
+`sources-template.jsonc` is the checked-in template; the real
 `sources.jsonc` is gitignored (contains user's actual channel/feed URLs). A parse failure throws
 with every error's `line:col`, failing the whole tool call rather than silently serving stale config.
 
@@ -180,6 +189,29 @@ windows-1251, and mojibake is worse than no text.
 **Item identity**: every `Item.id` is namespaced by source type and source id (e.g.
 `tg:<channel>/<msg_id>`, `rss:<source_id>:<guid>`) so ids are globally unique and stable across
 runs for dedup purposes.
+
+**Distribution** (`.github/workflows/release.yml`, `.claude-plugin/plugin.json`): every push to
+`main` bundles `server.ts` to a single `dist/server.js`, packs it with a *generated* manifest, and
+publishes it as `news-digest-mcp.tgz` on a `build-<sha>` release. The Claude Code plugin launches
+`npx -y <releases/latest/download/news-digest-mcp.tgz>`, so **the asset name is part of the public
+contract** — renaming it breaks every installed plugin. Developing is unaffected: `bun server.ts`
+still runs the TypeScript, and `dist/` is gitignored.
+
+Three things here are load-bearing. The artifact must be **JavaScript**: Node refuses to strip types
+for anything under `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), so a package
+shipping raw `.ts` cannot run however it is installed — which is what this pipeline exists to fix.
+`jsonc-parser` must stay `--external`: it has no `exports` map, so bun resolves its UMD `main`, whose
+wrapper does `require('./impl/format')` at runtime and dies once inlined. Everything else bundles, so
+an install fetches 2 packages rather than 129; the workflow greps the bundle for leftover relative
+requires to catch the next dependency that pulls the same trick. And the release is **gated on a
+smoke test that installs the tarball and drives the installed binary** over stdio, not on
+`dist/server.js` directly — the failure being guarded against only appears from under `node_modules`.
+
+The published manifest is generated in the workflow rather than being `package.json`, which declares
+inlined dependencies and dev-only scripts. Its version is `1.0.<run_number>`, so each release looks
+distinct to npm: the download URL is fixed, and a static version invites a stale cache. The repo
+manifest deliberately has **no `bin`**, so `npm i github:goldjee/news-digest-mcp` cannot advertise an
+entry point that would hit the type-stripping wall.
 
 ## Conventions
 

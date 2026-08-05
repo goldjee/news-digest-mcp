@@ -1,0 +1,118 @@
+name: Release
+
+# Every push to main publishes a release asset. `.claude-plugin/plugin.json` launches the server
+# from `releases/latest/download/news-digest-mcp.tgz`, so the asset name below is load-bearing:
+# rename it and every installed plugin breaks.
+#
+# The artifact is JavaScript, not TypeScript, because Node refuses to strip types for anything
+# under node_modules (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING). A package shipping raw .ts
+# cannot run however it is installed. Developing from a clone still needs no build step.
+
+on:
+    push:
+        branches: [main]
+    workflow_dispatch:
+
+permissions:
+    contents: write
+
+# Serialise, so two quick pushes can't race to publish and leave `latest` on the older build.
+concurrency:
+    group: release
+    cancel-in-progress: false
+
+jobs:
+    release:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+
+            # The repo has bun.lock and no package-lock.json, so `npm ci` is not an option.
+            - run: bun install --frozen-lockfile
+
+            # One near-self-contained file: `--target=node` inlines every dependency, leaving only
+            # node: builtins imported, so installing the result fetches 2 packages instead of 129.
+            # bun carries the `#!/usr/bin/env node` shebang through to the output.
+            #
+            # jsonc-parser is the exception. It has no `exports` map, so bun resolves its UMD `main`
+            # rather than the ESM `module`, and the UMD wrapper does `require("./impl/format")` at
+            # runtime — a relative require that cannot survive being bundled into one file. Keeping
+            # it external costs nothing: it has zero dependencies of its own.
+            - name: Build
+              run: bun run build
+
+            # The bundler leaving a relative require behind means a package resolved to a CJS/UMD
+            # entry that self-requires, as jsonc-parser does. It fails only when the bundle runs, so
+            # catch it here where the error can name the cause.
+            - name: Check for unresolved requires
+              run: |
+                  if grep -nE 'require[0-9]*\("\./' dist/server.js; then
+                    echo "::error::bundle contains relative runtime requires; add the offending package to --external in the build script"
+                    exit 1
+                  fi
+
+            # The repo manifest is not publishable as-is: it declares dependencies that are now
+            # inlined, plus dev-only scripts. Generate the package's own manifest instead.
+            # The version's patch is the run number so each release is distinct to npm — the tarball
+            # URL is fixed, so a stable version would give npm every excuse to serve a cached copy.
+            - name: Stage package
+              run: |
+                  node --input-type=module -e '
+                    import { readFileSync, writeFileSync, copyFileSync } from "node:fs";
+                    const src = JSON.parse(readFileSync("package.json", "utf8"));
+                    writeFileSync("dist/package.json", JSON.stringify({
+                      name: src.name,
+                      version: `1.0.${process.env.GITHUB_RUN_NUMBER}`,
+                      description: "MCP server aggregating news from Telegram channel previews and RSS/Atom feeds.",
+                      license: src.license,
+                      repository: src.repository,
+                      type: "module",
+                      bin: { "news-digest-mcp": "./server.js" },
+                      engines: { node: ">=20.11" },
+                      // Everything else is inlined; only the --external package is declared.
+                      dependencies: { "jsonc-parser": src.dependencies["jsonc-parser"] },
+                    }, null, 2) + "\n");
+                  '
+                  cp README.md LICENSE.md dist/
+
+            - name: Pack
+              run: |
+                  cd dist
+                  # npm pack names the file after name@version; the release asset name must not move.
+                  mv "$(npm pack --silent)" ../news-digest-mcp.tgz
+
+            # Install the tarball and drive the *installed* binary, not dist/server.js directly.
+            # Running it from under node_modules is the whole point: that is the path that broke
+            # before, and only this form would have caught it.
+            - name: Smoke-test the packed artifact
+              run: |
+                  mkdir -p "$RUNNER_TEMP/verify" && cd "$RUNNER_TEMP/verify"
+                  npm init -y >/dev/null
+                  npm install --no-fund --no-audit "$GITHUB_WORKSPACE/news-digest-mcp.tgz"
+                  out=$(printf '%s\n' \
+                    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+                    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+                    '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+                    '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_sources","arguments":{}}}' \
+                    | NEWS_DIGEST_CONFIG="$GITHUB_WORKSPACE/sources-template.jsonc" \
+                      NEWS_DIGEST_STATE="$RUNNER_TEMP/state.json" \
+                      ./node_modules/.bin/news-digest-mcp)
+                  echo "$out"
+                  echo "$out" | grep -q '"name":"get_news"' || { echo "::error::tools/list did not advertise get_news"; exit 1; }
+                  echo "$out" | grep -q '"name":"list_sources"' || { echo "::error::tools/list did not advertise list_sources"; exit 1; }
+                  # The tool call, not just the listing: this is what actually parses the config
+                  # through jsonc-parser, so it proves the external dependency resolves at runtime.
+                  echo "$out" | grep -q '"structuredContent":{"sources"' || { echo "::error::list_sources call returned no sources"; exit 1; }
+
+            - name: Publish release
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  tag="build-$(git rev-parse --short HEAD)"
+                  gh release create "$tag" news-digest-mcp.tgz \
+                    --title "$tag" \
+                    --notes "Built from ${GITHUB_SHA}. Install: \`npx -y https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/news-digest-mcp.tgz\`"
