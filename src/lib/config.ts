@@ -1,15 +1,32 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { type ParseError, parse, printParseErrorCode } from 'jsonc-parser';
 import type { Config } from './types.ts';
 
 /** Candidate config filenames, in resolution order. `.json` is kept so an older install keeps working. */
 const CANDIDATES = ['sources.jsonc', 'sources.json'] as const;
 
-/** Directory holding the server's own files — where a clone keeps its config, beside `server.ts`. */
+/**
+ * Directory holding the server's own files — where a clone keeps its config, beside the source.
+ *
+ * Found by walking up to the nearest `package.json` rather than by a fixed number of `..` hops,
+ * because the depth is layout-dependent and no single number is right for every layout: this file
+ * sits at `src/lib/` in a checkout, while the published bundle collapses the whole tree into one
+ * `dist/server.js`. A fixed hop is correct for exactly one of those and silently wrong for the
+ * other — and the symptom, "no config found", points nowhere near the cause.
+ *
+ * First match wins, so the walk stops at the package root and never climbs past it into
+ * `node_modules`. `loadConfig` runs a handful of times per tool call and is deliberately uncached
+ * (see below), but these are a few `existsSync` calls next to a `readFileSync` and a JSONC parse.
+ */
 function installDir(): string {
-    return resolve(import.meta.dirname, '..');
+    for (let dir = import.meta.dirname; ; ) {
+        if (existsSync(resolve(dir, 'package.json'))) return dir;
+        const parent = dirname(dir);
+        if (parent === dir) return import.meta.dirname; // filesystem root; nothing better to offer
+        dir = parent;
+    }
 }
 
 /**

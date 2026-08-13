@@ -1,27 +1,47 @@
 {
-    "name": "news-digest-mcp",
+    "name": "@goldjee/news-digest-mcp",
     "version": "1.0.0",
-    "private": true,
+    "description": "MCP server aggregating news from Telegram channel previews and RSS/Atom feeds.",
     "license": "Apache-2.0",
-    "repository": "github:goldjee/news-digest-mcp",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/goldjee/news-digest-mcp.git"
+    },
+    "homepage": "https://github.com/goldjee/news-digest-mcp#readme",
+    "keywords": [
+        "mcp",
+        "rss",
+        "telegram",
+        "news"
+    ],
     "type": "module",
+    "engines": {
+        "node": ">=20.11"
+    },
+    "bin": {
+        "news-digest-mcp": "./dist/server.js"
+    },
+    "files": [
+        "dist"
+    ],
     "scripts": {
         "lint": "bunx biome lint",
         "format": "bunx biome format",
         "check": "bunx biome check",
-        "build": "bun build ./server.ts --target=node --outdir=dist --external jsonc-parser"
+        "build": "bun build ./src/server.ts --target=node --outdir=dist --external jsonc-parser",
+        "prepack": "bun run build 1>&2"
     },
     "dependencies": {
-        "@modelcontextprotocol/sdk": "^1.12.0",
-        "@mozilla/readability": "^0.6.0",
-        "fast-xml-parser": "^4.5.0",
-        "jsonc-parser": "^3.3.1",
-        "linkedom": "^0.18.13",
-        "node-html-parser": "^6.1.13",
-        "zod": "^3.23.8"
+        "jsonc-parser": "^3.3.1"
     },
     "devDependencies": {
         "@biomejs/biome": "2.5.3",
-        "@types/bun": "^1.3.14"
+        "@modelcontextprotocol/sdk": "^1.12.0",
+        "@mozilla/readability": "^0.6.0",
+        "@types/bun": "^1.3.14",
+        "fast-xml-parser": "^4.5.0",
+        "linkedom": "^0.18.13",
+        "node-html-parser": "^6.1.13",
+        "zod": "^3.23.8"
     }
 }

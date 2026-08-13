@@ -4,16 +4,16 @@ A simple MCP server that fetches news from Telegram and RSS sources. Connect it 
 
 ## Setup
 
-The server speaks MCP over stdio. Run it from a clone, or with `npx` from the latest GitHub release.
-Your choice decides where the config lives.
+The server speaks MCP over stdio. Run it from a clone, or with `npx` from npm. Your choice decides
+where the config lives.
 
 The config is **JSONC** — regular JSON plus `//` comments and trailing commas. The template is
 commented throughout, so it doubles as the reference for every option.
 
 ### With npx
 
-npm fetches a prebuilt bundle from the latest GitHub release, which installs two packages and needs
-**Node ≥ 20.11**. CI builds that bundle on every push to `main`.
+npm fetches a prebuilt bundle from the registry, which installs two packages and needs
+**Node ≥ 20.11**. CI builds and publishes it on every push to `main`.
 
 With no checkout, the config has nowhere to sit beside the server, so put it in
 `~/.config/news-digest/`:
@@ -30,7 +30,7 @@ Add your Telegram/RSS sources to that file, then register the server:
   "mcpServers": {
     "news-digest": {
       "command": "npx",
-      "args": ["-y", "https://github.com/goldjee/news-digest-mcp/releases/latest/download/news-digest-mcp.tgz"]
+      "args": ["-y", "@goldjee/news-digest-mcp@latest"]
     }
   }
 }
@@ -39,10 +39,16 @@ Add your Telegram/RSS sources to that file, then register the server:
 Keep the `-y`. Without it, `npx` prompts on stdin before running a package it hasn't installed, and
 stdin carries the MCP protocol, so the handshake hangs.
 
-`latest` resolves against GitHub on every start, so the server needs network to register, before it
-fetches any news. To pin a build, swap `latest/download` for a specific release, as in
-`releases/download/build-a1b2c3d/news-digest-mcp.tgz`. To drop the per-start fetch, install once with
-`npm i -g <that URL>` and set `"command": "news-digest-mcp"` with no args.
+`@latest` is load-bearing, and a tarball URL is not a substitute for it. npm decides whether an
+already-installed npx package can be reused by comparing the resolved URL as a *string* — not by
+version, integrity, or content — so a fixed URL such as
+`releases/latest/download/news-digest-mcp.tgz` resolves once, at first install, and never updates
+again however many releases follow. `@latest` resolves to a versioned tarball whose URL moves on
+each publish, which is what lets a new release actually arrive.
+
+To pin a build instead, name the version: `@goldjee/news-digest-mcp@1.0.7`. To drop the per-start
+resolution, install once with `npm i -g @goldjee/news-digest-mcp` and set
+`"command": "news-digest-mcp"` with no args — then `npm update -g` is what moves you forward.
 
 The artifact is JavaScript rather than TypeScript, because Node refuses to strip types anywhere
 under `node_modules`. That also means Bun is not required: `bun` and `bunx` are for working from a
@@ -70,7 +76,7 @@ With Bun:
   "mcpServers": {
     "news-digest": {
       "command": "/Users/you/.bun/bin/bun",
-      "args": ["/path/to/news-digest/server.ts"]
+      "args": ["/path/to/news-digest/src/server.ts"]
     }
   }
 }
@@ -83,7 +89,7 @@ With Node (add `"--experimental-strip-types"` before the path on Node 22.6–23.
   "mcpServers": {
     "news-digest": {
       "command": "/usr/local/bin/node",
-      "args": ["/path/to/news-digest/server.ts"]
+      "args": ["/path/to/news-digest/src/server.ts"]
     }
   }
 }
@@ -236,7 +242,7 @@ error telling you to start a fresh run.
 
 ## Sources
 
-Edit `sources.jsonc` — re-read on every call, no restart. A source is `{ id, name, type, url }` (`type`: `telegram` | `rss`). A new type = a `lib/<type>.ts` plus one line in `HANDLERS` (`lib/run.ts`).
+Edit `sources.jsonc` — re-read on every call, no restart. A source is `{ id, name, type, url }` (`type`: `telegram` | `rss`). A new type = a `src/lib/<type>.ts` plus one line in `HANDLERS` (`src/lib/run.ts`).
 
 ## Full article text
 
@@ -265,7 +271,7 @@ resolve to a readable page.
 
 ## Without an agent
 
-Call it from code: `import { runDigest } from "./lib/run.ts"`.
+Call it from code: `import { runDigest } from "./src/lib/run.ts"`.
 
 ## Read entry store
 

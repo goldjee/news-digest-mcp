@@ -13,7 +13,7 @@
         "news-digest": {
             "type": "stdio",
             "command": "npx",
-            "args": ["-y", "https://github.com/goldjee/news-digest-mcp/releases/latest/download/news-digest-mcp.tgz"]
+            "args": ["-y", "@goldjee/news-digest-mcp@latest"]
         }
     }
 }
