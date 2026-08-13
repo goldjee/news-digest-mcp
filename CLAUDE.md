@@ -60,6 +60,17 @@ field added without a matching schema field fails the tool call outright rather 
 edit the schema, not the interface. Config *input* types (`Source`, `Config`, `Ctx`) stay plain
 interfaces: `lib/config.ts` validates those by hand so it can report each error's `line:col`.
 
+One correction rides on top of that conversion. The SDK announces the schemas it derives from zod
+as JSON Schema **draft-07** and takes no dialect option (`zod-to-json-schema` hardcodes it; the zod
+v4 branch is pinned to draft-7 too, unchanged as of SDK 1.30.0), while Claude Desktop compiles
+`outputSchema` with a validator that knows 2020-12 only — so it rejects both tools before a
+`tools/call` ever reaches this process. `lib/dialect.ts` rewrites that one `$schema` key at the
+transport, since the conversion happens inside an SDK request handler `McpServer` does not expose.
+The rewrite is only honest because nothing here serializes to a construct the two dialects read
+differently — no `definitions`/`$defs`/`$ref`, no tuple-form `items` — and the release workflow's
+smoke test asserts exactly that, so adding e.g. a `z.tuple()` fails the release rather than
+shipping a schema that lies about itself.
+
 **Paging** (`lib/run.ts::getNews` → `lib/snapshot.ts` + `lib/paginate.ts`): `get_news` returns one
 *page* of a run, not the whole thing, because MCP hosts cap tool output — osaurus head/tail-truncates
 past 100,000 chars (`ToolOutputCaps.universalResult`), and a `fullText` digest runs ~180 kB. A call

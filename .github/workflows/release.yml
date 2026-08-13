@@ -104,6 +104,23 @@ jobs:
                   echo "$out"
                   echo "$out" | grep -q '"name":"get_news"' || { echo "::error::tools/list did not advertise get_news"; exit 1; }
                   echo "$out" | grep -q '"name":"list_sources"' || { echo "::error::tools/list did not advertise list_sources"; exit 1; }
+                  # The dialect the tool schemas are announced under. The SDK stamps draft-07 and
+                  # offers no way to configure it, so lib/dialect.ts corrects it at the transport;
+                  # a client that validates 2020-12 only rejects both tools without it.
+                  echo "$out" | grep -q '"\$schema":"https://json-schema.org/draft/2020-12/schema"' \
+                    || { echo "::error::tool schemas do not declare the 2020-12 dialect; is lib/dialect.ts still wired into server.ts?"; exit 1; }
+                  if echo "$out" | grep -q 'json-schema.org/draft-07'; then
+                    echo "::error::a tool schema still declares draft-07; the dialect rewrite was bypassed"
+                    exit 1
+                  fi
+                  # Declaring 2020-12 is only honest while the emitted bodies read the same under
+                  # both dialects. zod-to-json-schema writes draft-07, so e.g. a z.tuple() added to
+                  # lib/schema.ts would serialize as array-form `items` + `additionalItems`, which
+                  # 2020-12 reads differently (it wants `prefixItems`). Fail the release instead.
+                  if echo "$out" | grep -qE '"(prefixItems|additionalItems|definitions|\$defs|\$ref)"'; then
+                    echo "::error::tool schema uses a construct whose meaning differs between draft-07 and 2020-12; see lib/dialect.ts"
+                    exit 1
+                  fi
                   # The tool call, not just the listing: this is what actually parses the config
                   # through jsonc-parser, so it proves the external dependency resolves at runtime.
                   echo "$out" | grep -q '"structuredContent":{"sources"' || { echo "::error::list_sources call returned no sources"; exit 1; }

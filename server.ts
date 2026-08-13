@@ -20,10 +20,15 @@
 // only `content` (osaurus is one) see the text block, so that is what a host's per-call
 // output cap is measured against — hence `get_news` pages. See lib/paginate.ts. The text
 // block's exact shape is the `hostEnvelope` config key; see lib/envelope.ts.
+//
+// Those published schemas need one correction on the way out: the SDK announces them as JSON
+// Schema draft-07 with no way to configure it, and a client that validates 2020-12 only rejects
+// both tools outright. See lib/dialect.ts, and the transport wrapper at the bottom of this file.
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { retargetToolSchemas } from './lib/dialect.ts';
 import { errorText, toolText } from './lib/envelope.ts';
 import { getNews, listSources } from './lib/run.ts';
 import { listSourcesShape, payloadShape } from './lib/schema.ts';
@@ -117,5 +122,13 @@ server.registerTool(
 );
 
 const transport = new StdioServerTransport();
+
+// Fix the dialect the SDK declares on the tool schemas it builds for `tools/list`. Done here
+// rather than at registration because the zod -> JSON Schema conversion happens inside the SDK's
+// own request handler, which `McpServer` does not expose; `Transport.send` is the public seam
+// that sees the finished message. See lib/dialect.ts for why this is necessary at all.
+const send = transport.send.bind(transport);
+transport.send = (message) => send(retargetToolSchemas(message));
+
 await server.connect(transport);
 // stdio server stays alive on the transport; nothing else to do here.
